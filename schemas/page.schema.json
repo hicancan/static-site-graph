@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "page_id",
+    "site_id",
+    "url",
+    "page_type",
+    "status"
+  ],
+  "properties": {
+    "page_id": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "section_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "url": {
+      "type": "string"
+    },
+    "page_type": {
+      "type": "string"
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "published_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "content_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "content_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string"
+    },
+    "extraction_strategy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fetched_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

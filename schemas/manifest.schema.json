@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "site_id",
+    "generated_at",
+    "totals",
+    "outcomes"
+  ],
+  "properties": {
+    "site_id": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "totals": {
+      "type": "object"
+    },
+    "outcomes": {
+      "type": "object"
+    },
+    "errors": {
+      "type": "array"
+    },
+    "quality": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "edge_id",
+    "from_url",
+    "to_url",
+    "edge_type"
+  ],
+  "properties": {
+    "edge_id": {
+      "type": "string"
+    },
+    "from_url": {
+      "type": "string"
+    },
+    "to_url": {
+      "type": "string"
+    },
+    "anchor_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "edge_type": {
+      "type": "string"
+    },
+    "same_domain": {
+      "type": "boolean"
+    }
+  }
+}

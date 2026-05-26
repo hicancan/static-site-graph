@@ -1,0 +1,22 @@
+[project]
+name = "static-site-graph"
+version = "0.1.0"
+description = "Structured site graph and crawl audit framework for static/semi-static websites"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "requests>=2.31",
+  "lxml>=5.0",
+  "PyYAML>=6.0",
+  "jsonschema>=4.20"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[project.scripts]
+sitegraph = "sitegraph.cli:main"

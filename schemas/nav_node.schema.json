@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "node_id",
+    "site_id",
+    "label",
+    "nav_path",
+    "target_type"
+  ],
+  "properties": {
+    "node_id": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "nav_path": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "target_type": {
+      "type": "string"
+    },
+    "same_domain": {
+      "type": "boolean"
+    },
+    "parent_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

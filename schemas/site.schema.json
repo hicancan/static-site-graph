@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "site_id",
+    "name",
+    "base_url",
+    "domain",
+    "adapter",
+    "created_at"
+  ],
+  "properties": {
+    "site_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "base_url": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string"
+    },
+    "adapter": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

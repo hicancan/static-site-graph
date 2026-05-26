@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "section_id",
+    "site_id",
+    "name",
+    "url",
+    "section_type",
+    "nav_path",
+    "crawlable"
+  ],
+  "properties": {
+    "section_id": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "section_type": {
+      "type": "string"
+    },
+    "nav_path": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "crawlable": {
+      "type": "boolean"
+    },
+    "business_tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "pagination": {
+      "type": "object"
+    }
+  }
+}
