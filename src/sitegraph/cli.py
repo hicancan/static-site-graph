@@ -639,6 +639,15 @@ def crawl_site(args: argparse.Namespace) -> None:
             crawl_list_section(section)
 
     sections_for_output = sections_out + extra_report_sections
+    if incremental:
+        sections_by_id = {
+            section['section_id']: section
+            for section in _read_json(out_root / 'sections.json', [])
+            if isinstance(section, dict) and section.get('section_id')
+        }
+        for section in sections_for_output:
+            sections_by_id[section['section_id']] = section
+        sections_for_output = list(sections_by_id.values())
     _write_json_preserving_volatile(out_root / 'sections.json', sections_for_output, incremental)
     _write_jsonl_preserving_volatile(out_root / 'list_pages.jsonl', list(list_pages_by_url.values()), incremental)
     _write_jsonl_preserving_volatile(out_root / 'detail_pages.jsonl', list(detail_records_by_url.values()), incremental)

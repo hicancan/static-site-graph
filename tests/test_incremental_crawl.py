@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from sitegraph import cli
@@ -109,6 +110,21 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
     assert counts['https://demo.example.edu/2026/0502/c1a2/page.htm'] == 1
     assert counts['https://demo.example.edu/2026/0501/c1a1/page.htm'] == 1
 
+    sections_path = out / 'sections.json'
+    sections = json.loads(sections_path.read_text(encoding='utf-8'))
+    sections.append({
+        'section_id': 'demo_old_section',
+        'site_id': 'demo',
+        'name': 'Old archived section',
+        'url': 'https://demo.example.edu/old/list.htm',
+        'section_type': 'list',
+        'nav_path': ['Old archived section'],
+        'crawlable': True,
+        'business_tags': ['notice'],
+        'pagination': {'type': 'next_link'},
+    })
+    sections_path.write_text(json.dumps(sections, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
     pages['https://demo.example.edu/1/list.htm'] = list_html(
         [
             ('New notice C', '/2026/0503/c1a3/page.htm', '2026-05-03'),
@@ -123,6 +139,7 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
     assert counts['https://demo.example.edu/2026/0503/c1a3/page.htm'] == 1
     assert 'https://demo.example.edu/2026/0502/c1a2/page.htm' not in counts
     assert (out / 'detail_pages.jsonl').read_text(encoding='utf-8').count('New notice C') == 1
+    assert 'demo_old_section' in (out / 'sections.json').read_text(encoding='utf-8')
 
     snapshot = {path.name: path.read_text(encoding='utf-8') for path in out.iterdir() if path.is_file()}
     counts.clear()
