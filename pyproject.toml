@@ -2,6 +2,7 @@
 name = "static-site-graph"
 version = "0.1.0"
 description = "Structured site graph and crawl audit framework for static/semi-static websites"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "beautifulsoup4>=4.12",
