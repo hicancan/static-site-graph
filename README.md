@@ -30,22 +30,10 @@ site
 5. Feed downstream systems.
 6. Backfeed reusable discoveries into this template.
 
-## Claude Code first
+## Repository boundary
 
-This project is designed around Claude Code only:
-
-- `CLAUDE.md` gives persistent project instructions.
-- `.claude/rules/` stores modular rules.
-- `.claude/skills/advance-sitegraph/` gives a reusable workflow.
-- `.claude/settings.json` defines shared permissions and safety boundaries.
-
-Start Claude Code from this repository with Chrome enabled when auditing real websites:
-
-```bash
-claude --chrome
-```
-
-Then run the project skill or use an explicit `/goal` condition supplied by an instance project.
+Only framework source, schemas, examples, tests, workflows, and the minimal README are tracked here.
+Local docs, audit notes, prompts, and agent/Claude/Codex configuration are intentionally ignored so the framework stays product-facing and reusable.
 
 ## Development commands
 
