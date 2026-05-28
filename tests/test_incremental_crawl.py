@@ -66,6 +66,17 @@ sections:
       type: next_link
       max_pages_safety: 10
     item_container_selector: ".news_list.list2"
+  - section_id: demo_landing
+    site_id: demo
+    name: Landing
+    url: https://demo.example.edu/landing/list.htm
+    section_type: list
+    nav_path: [Landing]
+    crawlable: true
+    business_tags: [system]
+    pagination:
+      type: none
+    item_container_selector: ".news_list.list2"
 ''',
         encoding='utf-8',
     )
@@ -100,6 +111,14 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
         ),
         'https://demo.example.edu/2026/0502/c1a2/page.htm': detail_html('Old notice A'),
         'https://demo.example.edu/2026/0501/c1a1/page.htm': detail_html('Old notice B', '2026-05-01'),
+        'https://demo.example.edu/landing/list.htm': '''
+            <html><body>
+              <div class="wp_articlecontent">
+                Landing system
+                <a href="https://external.example.edu/landing-system">Landing system</a>
+              </div>
+            </body></html>
+        ''',
     }
     counts: dict[str, int] = {}
 
@@ -144,7 +163,7 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
     assert 'https://demo.example.edu/2026/0502/c1a2/page.htm' not in counts
     assert (out / 'detail_pages.jsonl').read_text(encoding='utf-8').count('New notice C') == 1
     assert 'demo_old_section' in (out / 'sections.json').read_text(encoding='utf-8')
-    assert 'https://external.example.edu/system' in (out / 'external_links.jsonl').read_text(encoding='utf-8')
+    assert 'https://external.example.edu/landing-system' in (out / 'external_links.jsonl').read_text(encoding='utf-8')
 
     snapshot = {path.name: path.read_text(encoding='utf-8') for path in out.iterdir() if path.is_file()}
     counts.clear()

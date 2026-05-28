@@ -505,6 +505,17 @@ def crawl_site(args: argparse.Namespace) -> None:
     def record_section_content_page(url: str, section: dict, source_url: str, html: str, status_code: int | None = None) -> None:
         url = normalize_url(url, base_url)
         if url in detail_records_by_url:
+            page = detail_records_by_url[url]
+            for inline_link in page.get('inline_links', []):
+                if inline_link['target_type'] in {'external_link', 'redirect_link'}:
+                    add_external(inline_link, url, section)
+                elif inline_link['target_type'] == 'section_list_page' and same_domain(inline_link['url'], base_url):
+                    queue_inline_section(inline_link, section, url)
+                    add_outcome(inline_link['url'], inline_link['target_type'], 'inline_link_recorded', url, inline_link.get('label'), section['section_id'])
+                else:
+                    add_outcome(inline_link['url'], inline_link['target_type'], 'inline_link_recorded', url, inline_link.get('label'), section['section_id'])
+            for image in page.get('inline_images', []):
+                add_outcome(image['url'], 'static_asset', 'inline_image_recorded', url, image.get('alt'), section['section_id'])
             return
         page, atts, edges = extract_detail_page(html, url, base_url, site_id, section['section_id'])
         if not (page.get('title') or page.get('content_text') or atts or page.get('inline_links') or page.get('inline_images')):
