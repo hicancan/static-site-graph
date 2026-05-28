@@ -21,6 +21,46 @@ from .classify import classify_url, same_domain
 from .util import now_iso, stable_id, write_json, write_jsonl, normalize_url
 
 
+VOLATILE_OUTPUT_KEYS = {'created_at', 'generated_at', 'fetched_at', 'recorded_at'}
+
+
+def _read_json(path: Path, default):
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+
+def _without_volatile(value):
+    if isinstance(value, dict):
+        return {key: _without_volatile(item) for key, item in value.items() if key not in VOLATILE_OUTPUT_KEYS}
+    if isinstance(value, list):
+        return [_without_volatile(item) for item in value]
+    return value
+
+
+def _canonical_record_list(records: list[dict]) -> list[dict]:
+    normalized = [_without_volatile(record) for record in records]
+    return sorted(normalized, key=lambda record: json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def _write_json_preserving_volatile(path: Path, payload: object, preserve_volatile: bool) -> None:
+    if preserve_volatile and path.exists() and _without_volatile(_read_json(path, None)) == _without_volatile(payload):
+        return
+    write_json(path, payload)
+
+
+def _write_jsonl_preserving_volatile(path: Path, records: list[dict], preserve_volatile: bool) -> None:
+    if preserve_volatile and path.exists() and _canonical_record_list(_read_jsonl(path)) == _canonical_record_list(records):
+        return
+    write_jsonl(path, records)
+
+
 def validate_config(args: argparse.Namespace) -> None:
     cfg = load_yaml(args.config)
     for key in ['site']:
@@ -152,12 +192,23 @@ def crawl_site(args: argparse.Namespace) -> None:
     site_id = site['id']
     timeout = int(cfg.get('crawl_policy', {}).get('timeout_seconds', 20))
     out_root = Path(args.out or f'data/sites/{site_id}/index')
+    incremental = bool(getattr(args, 'incremental', False)) and out_root.exists()
+    known_page_stop = max(1, int(getattr(args, 'incremental_known_page_stop', 1)))
+    refresh_frontier = max(0, int(getattr(args, 'incremental_refresh_frontier', 3)))
     if args.dry_run:
-        print(json.dumps({'dry_run': True, 'site_id': site_id, 'base_url': base_url, 'sections': len(cfg.get('sections', []))}, ensure_ascii=False, indent=2))
+        print(json.dumps({
+            'dry_run': True,
+            'site_id': site_id,
+            'base_url': base_url,
+            'sections': len(cfg.get('sections', [])),
+            'incremental': bool(getattr(args, 'incremental', False)),
+        }, ensure_ascii=False, indent=2))
         return
 
     out_root.mkdir(parents=True, exist_ok=True)
-    write_json(out_root / 'site.json', {
+    old_manifest = _read_json(out_root / 'manifest.json', {}) if incremental else {}
+
+    _write_json_preserving_volatile(out_root / 'site.json', {
         'site_id': site_id,
         'name': site['name'],
         'base_url': base_url,
@@ -165,7 +216,7 @@ def crawl_site(args: argparse.Namespace) -> None:
         'adapter': site['adapter'],
         'created_at': now_iso(),
         'notes': site.get('notes', ''),
-    })
+    }, incremental)
 
     manifest = {
         'site_id': site_id,
@@ -174,14 +225,30 @@ def crawl_site(args: argparse.Namespace) -> None:
         'outcomes': {},
         'errors': [],
         'quality': {},
-        'url_outcomes': {},
+        'url_outcomes': dict(old_manifest.get('url_outcomes', {})) if incremental else {},
     }
+    initial_known_urls = set(manifest['url_outcomes'])
     fetch_cache = {}
-    detail_records_by_url: dict[str, dict] = {}
-    attachments_by_id: dict[str, dict] = {}
-    external_links_by_id: dict[str, dict] = {}
-    edges_by_id: dict[str, dict] = {}
-    list_pages: list[dict] = []
+    detail_records_by_url: dict[str, dict] = {
+        normalize_url(record['url'], base_url): record
+        for record in _read_jsonl(out_root / 'detail_pages.jsonl')
+    } if incremental else {}
+    attachments_by_id: dict[str, dict] = {
+        record['attachment_id']: record
+        for record in _read_jsonl(out_root / 'attachments.jsonl')
+    } if incremental else {}
+    external_links_by_id: dict[str, dict] = {
+        record['external_id']: record
+        for record in _read_jsonl(out_root / 'external_links.jsonl')
+    } if incremental else {}
+    edges_by_id: dict[str, dict] = {
+        record['edge_id']: record
+        for record in _read_jsonl(out_root / 'edges.jsonl')
+    } if incremental else {}
+    list_pages_by_url: dict[str, dict] = {
+        normalize_url(record['url'], base_url): record
+        for record in _read_jsonl(out_root / 'list_pages.jsonl')
+    } if incremental else {}
 
     def fetch(url: str):
         url = normalize_url(url, base_url)
@@ -264,6 +331,18 @@ def crawl_site(args: argparse.Namespace) -> None:
         attachments_by_id[attachment['attachment_id']] = attachment
         add_outcome(attachment['url'], 'attachment_file', 'attachment_metadata_only', source_url, attachment.get('name'), section_id)
 
+    def remove_records_from_source(source_url: str) -> None:
+        source_url = normalize_url(source_url, base_url)
+        for attachment_id, attachment in list(attachments_by_id.items()):
+            if normalize_url(attachment.get('parent_url', ''), base_url) == source_url:
+                attachments_by_id.pop(attachment_id, None)
+        for external_id, external in list(external_links_by_id.items()):
+            if normalize_url(external.get('source_url', ''), base_url) == source_url:
+                external_links_by_id.pop(external_id, None)
+        for edge_id, edge in list(edges_by_id.items()):
+            if normalize_url(edge.get('from_url', ''), base_url) == source_url:
+                edges_by_id.pop(edge_id, None)
+
     home_res = fetch(base_url)
     if home_res.error or (home_res.status_code and home_res.status_code >= 400):
         manifest['errors'].append({'url': base_url, 'status_code': home_res.status_code, 'error': home_res.error or f'HTTP {home_res.status_code}', 'phase': 'homepage'})
@@ -292,6 +371,7 @@ def crawl_site(args: argparse.Namespace) -> None:
                 continue
             seen_modules.add(key)
             homepage_modules.append(module)
+        remove_records_from_source(base_url)
         home_links, home_edges = extract_all_links(home_html, base_url, base_url)
         add_edges(home_edges)
         for link in home_links:
@@ -309,8 +389,8 @@ def crawl_site(args: argparse.Namespace) -> None:
             else:
                 add_outcome(link['url'], link['target_type'], 'homepage_link_recorded', base_url, link.get('label'))
 
-    write_json(out_root / 'nav_tree.json', {'site_id': site_id, 'generated_at': now_iso(), 'nodes': nav_nodes})
-    write_json(out_root / 'homepage_modules.json', {'site_id': site_id, 'generated_at': now_iso(), 'modules': homepage_modules})
+    _write_json_preserving_volatile(out_root / 'nav_tree.json', {'site_id': site_id, 'generated_at': now_iso(), 'nodes': nav_nodes}, incremental)
+    _write_json_preserving_volatile(out_root / 'homepage_modules.json', {'site_id': site_id, 'generated_at': now_iso(), 'modules': homepage_modules}, incremental)
 
     sections_by_url: dict[str, dict] = {}
 
@@ -378,11 +458,13 @@ def crawl_site(args: argparse.Namespace) -> None:
             'source_url': source_url,
         })
 
-    def crawl_detail(url: str, section: dict, source_url: str, label: str | None = None) -> None:
+    def crawl_detail(url: str, section: dict, source_url: str, label: str | None = None, force_refresh: bool = False) -> None:
         url = normalize_url(url, base_url)
-        if url in detail_records_by_url:
+        if url in detail_records_by_url and not force_refresh:
             add_outcome(url, 'detail_article_page', 'crawled_detail_ok', source_url, label, section['section_id'])
             return
+        if force_refresh:
+            remove_records_from_source(url)
         res = fetch(url)
         if res.error or (res.status_code and res.status_code >= 400):
             err = {'url': url, 'status_code': res.status_code, 'error': res.error or f'HTTP {res.status_code}', 'section_id': section['section_id'], 'phase': 'detail'}
@@ -431,14 +513,13 @@ def crawl_site(args: argparse.Namespace) -> None:
         for image in page.get('inline_images', []):
             add_outcome(image['url'], 'static_asset', 'inline_image_recorded', url, image.get('alt'), section['section_id'])
 
-    section_index = 0
-    while section_index < len(sections_out):
-        section = sections_out[section_index]
-        section_index += 1
+    def crawl_list_section(section: dict) -> None:
         section_id = section['section_id']
         next_url = normalize_url(section['url'], base_url)
         visited = set()
         page_index = 1
+        known_pages_in_a_row = 0
+        frontier_remaining = refresh_frontier if incremental else 0
         max_pages = int(section.get('pagination', {}).get('max_pages_safety', cfg.get('crawl_policy', {}).get('max_pages_safety', 20)))
         while next_url and next_url not in visited and page_index <= max_pages:
             visited.add(next_url)
@@ -451,7 +532,9 @@ def crawl_site(args: argparse.Namespace) -> None:
             item_container_selector = section.get('item_container_selector') or cfg.get('selectors', {}).get('list', {}).get('item_container')
             items = extract_list_items(res.text, next_url, base_url, item_container_selector)
             item_counts = Counter(item['target_type'] for item in items)
-            list_pages.append({
+            page_has_new = any(normalize_url(item['url'], base_url) not in initial_known_urls for item in items)
+            remove_records_from_source(next_url)
+            list_pages_by_url[next_url] = {
                 'page_id': stable_id(site_id, next_url),
                 'site_id': site_id,
                 'section_id': section_id,
@@ -463,39 +546,62 @@ def crawl_site(args: argparse.Namespace) -> None:
                 'target_type_counts': dict(item_counts),
                 'pagination': extract_pagination_metadata(res.text),
                 'fetched_at': now_iso(),
-            })
+            }
             add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
             if not items:
                 record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
             for item in items:
                 target_type = item['target_type']
-                edge_id = stable_id(next_url, item['url'], item['title'], item.get('position', 0))
+                item_url = normalize_url(item['url'], base_url)
+                edge_id = stable_id(next_url, item_url, item['title'], item.get('position', 0))
                 edges_by_id[edge_id] = {
                     'edge_id': edge_id,
                     'from_url': next_url,
-                    'to_url': item['url'],
+                    'to_url': item_url,
                     'anchor_text': item['title'],
                     'edge_type': 'list_item',
                     'target_type': target_type,
-                    'same_domain': same_domain(item['url'], base_url),
+                    'same_domain': same_domain(item_url, base_url),
                 }
                 if target_type == 'detail_article_page':
-                    crawl_detail(item['url'], section, next_url, item['title'])
+                    old_page = detail_records_by_url.get(item_url)
+                    title_changed = bool(old_page and item.get('title') and old_page.get('title') and item['title'] != old_page.get('title'))
+                    refresh_recent = incremental and item_url in initial_known_urls and frontier_remaining > 0
+                    if refresh_recent:
+                        frontier_remaining -= 1
+                    force_refresh = (
+                        not incremental
+                        or item_url not in initial_known_urls
+                        or item_url not in detail_records_by_url
+                        or title_changed
+                        or refresh_recent
+                    )
+                    crawl_detail(item_url, section, next_url, item['title'], force_refresh=force_refresh)
                 elif target_type == 'attachment_file':
                     add_attachment({
-                        'attachment_id': stable_id(next_url, item['url'], item['title']),
+                        'attachment_id': stable_id(next_url, item_url, item['title']),
                         'parent_url': next_url,
                         'name': item['title'],
-                        'url': item['url'],
-                        'extension': item['url'].rsplit('.', 1)[-1].lower(),
+                        'url': item_url,
+                        'extension': item_url.rsplit('.', 1)[-1].lower(),
                         'position': item.get('position', 0),
                     }, next_url, section_id)
                 elif target_type in {'external_link', 'redirect_link'}:
-                    add_external({'url': item['url'], 'label': item['title'], 'target_type': target_type}, next_url, section)
+                    add_external({'url': item_url, 'label': item['title'], 'target_type': target_type}, next_url, section)
                 else:
-                    add_outcome(item['url'], target_type, f'{target_type}_recorded', next_url, item['title'], section_id)
+                    add_outcome(item_url, target_type, f'{target_type}_recorded', next_url, item['title'], section_id)
             next_url = discover_next_url(res.text, next_url, base_url)
+            if incremental:
+                known_pages_in_a_row = 0 if page_has_new else known_pages_in_a_row + 1
+                if known_pages_in_a_row >= known_page_stop:
+                    break
             page_index += 1
+
+    section_index = 0
+    while section_index < len(sections_out):
+        section = sections_out[section_index]
+        section_index += 1
+        crawl_list_section(section)
 
     direct_detail_section = {
         'section_id': f'{site_id}_direct_detail_links',
@@ -530,82 +636,22 @@ def crawl_site(args: argparse.Namespace) -> None:
         while section_index < len(sections_out):
             section = sections_out[section_index]
             section_index += 1
-            section_id = section['section_id']
-            next_url = normalize_url(section['url'], base_url)
-            visited = set()
-            page_index = 1
-            max_pages = int(section.get('pagination', {}).get('max_pages_safety', cfg.get('crawl_policy', {}).get('max_pages_safety', 20)))
-            while next_url and next_url not in visited and page_index <= max_pages:
-                visited.add(next_url)
-                res = fetch(next_url)
-                if res.error or (res.status_code and res.status_code >= 400):
-                    err = {'url': next_url, 'status_code': res.status_code, 'error': res.error or f'HTTP {res.status_code}', 'section_id': section_id, 'phase': 'list'}
-                    manifest['errors'].append(err)
-                    add_outcome(next_url, 'section_list_page', 'error', section.get('url'), section.get('name'), section_id, res.status_code, err['error'])
-                    break
-                item_container_selector = section.get('item_container_selector') or cfg.get('selectors', {}).get('list', {}).get('item_container')
-                items = extract_list_items(res.text, next_url, base_url, item_container_selector)
-                item_counts = Counter(item['target_type'] for item in items)
-                list_pages.append({
-                    'page_id': stable_id(site_id, next_url),
-                    'site_id': site_id,
-                    'section_id': section_id,
-                    'url': next_url,
-                    'page_type': 'section_list_page',
-                    'status': 'ok',
-                    'page_index': page_index,
-                    'item_count': len(items),
-                    'target_type_counts': dict(item_counts),
-                    'pagination': extract_pagination_metadata(res.text),
-                    'fetched_at': now_iso(),
-                })
-                add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
-                if not items:
-                    record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
-                for item in items:
-                    target_type = item['target_type']
-                    edge_id = stable_id(next_url, item['url'], item['title'], item.get('position', 0))
-                    edges_by_id[edge_id] = {
-                        'edge_id': edge_id,
-                        'from_url': next_url,
-                        'to_url': item['url'],
-                        'anchor_text': item['title'],
-                        'edge_type': 'list_item',
-                        'target_type': target_type,
-                        'same_domain': same_domain(item['url'], base_url),
-                    }
-                    if target_type == 'detail_article_page':
-                        crawl_detail(item['url'], section, next_url, item['title'])
-                    elif target_type == 'attachment_file':
-                        add_attachment({
-                            'attachment_id': stable_id(next_url, item['url'], item['title']),
-                            'parent_url': next_url,
-                            'name': item['title'],
-                            'url': item['url'],
-                            'extension': item['url'].rsplit('.', 1)[-1].lower(),
-                            'position': item.get('position', 0),
-                        }, next_url, section_id)
-                    elif target_type in {'external_link', 'redirect_link'}:
-                        add_external({'url': item['url'], 'label': item['title'], 'target_type': target_type}, next_url, section)
-                    else:
-                        add_outcome(item['url'], target_type, f'{target_type}_recorded', next_url, item['title'], section_id)
-                next_url = discover_next_url(res.text, next_url, base_url)
-                page_index += 1
+            crawl_list_section(section)
 
     sections_for_output = sections_out + extra_report_sections
-    write_json(out_root / 'sections.json', sections_for_output)
-    write_jsonl(out_root / 'list_pages.jsonl', list_pages)
-    write_jsonl(out_root / 'detail_pages.jsonl', list(detail_records_by_url.values()))
-    write_jsonl(out_root / 'attachments.jsonl', list(attachments_by_id.values()))
-    write_jsonl(out_root / 'external_links.jsonl', list(external_links_by_id.values()))
-    write_jsonl(out_root / 'edges.jsonl', list(edges_by_id.values()))
+    _write_json_preserving_volatile(out_root / 'sections.json', sections_for_output, incremental)
+    _write_jsonl_preserving_volatile(out_root / 'list_pages.jsonl', list(list_pages_by_url.values()), incremental)
+    _write_jsonl_preserving_volatile(out_root / 'detail_pages.jsonl', list(detail_records_by_url.values()), incremental)
+    _write_jsonl_preserving_volatile(out_root / 'attachments.jsonl', list(attachments_by_id.values()), incremental)
+    _write_jsonl_preserving_volatile(out_root / 'external_links.jsonl', list(external_links_by_id.values()), incremental)
+    _write_jsonl_preserving_volatile(out_root / 'edges.jsonl', list(edges_by_id.values()), incremental)
 
     outcome_counts = Counter(item['outcome'] for item in manifest['url_outcomes'].values())
     manifest['totals'] = {
         'sections': len(sections_for_output),
         'nav_nodes': len(nav_nodes),
         'homepage_modules': len(homepage_modules),
-        'list_pages': len(list_pages),
+        'list_pages': len(list_pages_by_url),
         'detail_pages': len(detail_records_by_url),
         'low_content_detail_pages': sum(1 for page in detail_records_by_url.values() if page.get('content_status') == 'low_content'),
         'attachments': len(attachments_by_id),
@@ -620,7 +666,7 @@ def crawl_site(args: argparse.Namespace) -> None:
         'attachment_policy': cfg.get('crawl_policy', {}).get('attachment_policy', 'metadata_only'),
         'external_link_policy': cfg.get('crawl_policy', {}).get('external_link_policy', 'record_only'),
     }
-    write_json(out_root / 'manifest.json', manifest)
+    _write_json_preserving_volatile(out_root / 'manifest.json', manifest, incremental)
     print(json.dumps(manifest['totals'], ensure_ascii=False, indent=2))
 
 
@@ -647,6 +693,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('config')
     p.add_argument('--out')
     p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--incremental', action='store_true', help='reuse an existing output package and crawl only front matter/new URLs')
+    p.add_argument('--incremental-known-page-stop', type=int, default=1, help='stop a section after this many consecutive already-known list pages')
+    p.add_argument('--incremental-refresh-frontier', type=int, default=3, help='refresh this many already-known detail pages per section')
     p.set_defaults(func=crawl_site)
     p = sub.add_parser('discover-homepage')
     p.add_argument('config')
