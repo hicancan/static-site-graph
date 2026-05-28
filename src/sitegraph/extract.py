@@ -9,8 +9,11 @@ from .util import clean_text, normalize_url, stable_id
 
 LIST_CONTAINER_SELECTORS = [
     '.news_list.list2',
+    '.news_list2.list2',
     '.col_news_con .news_list',
     '.col_news_list .news_list',
+    '.col_news_con .news_list2',
+    '.col_news_list .news_list2',
 ]
 
 SKIP_LINK_TEXT = {
@@ -28,8 +31,14 @@ SKIP_LINK_TEXT = {
 }
 
 MODULE_LABELS = [
+    '新闻资讯',
     '新闻动态',
     '通知公告',
+    '学工要闻',
+    '政策法规',
+    '下载专区',
+    '双创项目',
+    '竞赛成果',
     '教务快讯',
     '教改动态',
     '八面来风',
@@ -37,6 +46,13 @@ MODULE_LABELS = [
     '本科教学工程',
     '校内链接',
     '校外链接',
+]
+
+MODULE_CONTAINER_SELECTORS = [
+    'div[class*="post-"]',
+    '.links-wrap',
+    '.ml',
+    '.mr',
 ]
 
 
@@ -175,14 +191,30 @@ def extract_nav_tree_from_homepage(html: str, page_url: str, base_url: str, site
     return nodes
 
 
-def extract_homepage_modules(html: str, page_url: str, base_url: str, site_id: str) -> list[dict]:
+def extract_homepage_modules(
+    html: str,
+    page_url: str,
+    base_url: str,
+    site_id: str,
+    module_labels: list[str] | None = None,
+    container_selectors: list[str] | None = None,
+) -> list[dict]:
     soup = soup_from_html(html)
-    containers = soup.select('div[class*="post-"], .links-wrap, .ml, .mr')
+    labels = module_labels or MODULE_LABELS
+    selectors = container_selectors or MODULE_CONTAINER_SELECTORS
+    containers = []
+    seen_container_ids = set()
+    for selector in selectors:
+        for container in soup.select(selector):
+            ident = id(container)
+            if ident not in seen_container_ids:
+                seen_container_ids.add(ident)
+                containers.append(container)
     modules: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
     for idx, container in enumerate(containers):
         text = clean_text(container.get_text(' ', strip=True))
-        name = next((label for label in MODULE_LABELS if label in text), '')
+        name = next((label for label in labels if label in text), '')
         if not name:
             continue
         links, _ = extract_all_links(str(container), page_url, base_url)
@@ -271,7 +303,7 @@ def extract_pagination_metadata(html: str) -> dict:
         'current_page': None,
         'total_pages': None,
     }
-    m = re.search(r'每页\s*(\d+)\s*记录\s*总共\s*(\d+)\s*记录\s*页码\s*(\d+)\s*/\s*(\d+)', text)
+    m = re.search(r'每页\s*(\d+)\s*记录\s*总共\s*(\d+)\s*记录.*?页码\s*(\d+)\s*/\s*(\d+)', text)
     if m:
         meta.update({
             'raw_text': m.group(0),
@@ -284,7 +316,7 @@ def extract_pagination_metadata(html: str) -> dict:
 
 
 def _extract_detail_content_node(soup: BeautifulSoup) -> tuple[Tag | BeautifulSoup, str]:
-    for selector in ['.wp_articlecontent', '.article', '.article_content', '.news_content', '.v_news_content', '#wp_content_w6_0', 'main']:
+    for selector in ['.wp_articlecontent', '.article', '.entry', '.read', '.article_content', '.news_content', '.v_news_content', '#wp_content_w6_0', '.col_news_con', 'main']:
         node = soup.select_one(selector)
         if node:
             return node, selector
@@ -294,7 +326,7 @@ def _extract_detail_content_node(soup: BeautifulSoup) -> tuple[Tag | BeautifulSo
 def extract_detail_page(html: str, page_url: str, base_url: str, site_id: str, section_id: str | None = None) -> tuple[dict, list[dict], list[dict]]:
     soup = soup_from_html(html)
     title = ''
-    for selector in ['.arti_title', '.articleTitle', '.news_title', 'h1', 'title']:
+    for selector in ['.arti_title', '.articleTitle', '.col_title', '.news_title', 'title', 'h1']:
         node = soup.select_one(selector)
         if node:
             title = clean_text(node.get_text(' ', strip=True))

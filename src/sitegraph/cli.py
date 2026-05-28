@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import load_yaml
-from .fetch import fetch_html
+from .fetch import fetch_html, fetch_redirect_location
 from .extract import (
     extract_all_links,
     extract_detail_page,
@@ -87,6 +87,29 @@ def _section_from_module(site_id: str, module: dict) -> dict | None:
         'homepage_url': module['url'],
         'container_selector': module.get('container_selector'),
     }
+
+
+def _configured_homepage_modules(cfg: dict, base_url: str, site_id: str) -> list[dict]:
+    modules = []
+    for idx, item in enumerate(cfg.get('homepage_modules', [])):
+        name = item.get('name')
+        list_url = item.get('list_url') or item.get('url')
+        if not name or not list_url:
+            continue
+        list_url = normalize_url(list_url, base_url)
+        modules.append({
+            'module_id': item.get('module_id') or f'{site_id}_home_module_{stable_id(name, list_url, length=12)}',
+            'site_id': site_id,
+            'name': name,
+            'url': normalize_url(item.get('homepage_url') or base_url, base_url),
+            'list_url': list_url,
+            'container_selector': item.get('container_selector'),
+            'link_count': item.get('link_count'),
+            'position': item.get('position', idx),
+            'source': item.get('source', 'config'),
+            'notes': item.get('notes'),
+        })
+    return modules
 
 
 def _external_category(label: str, url: str, cfg: dict, section: dict | None = None) -> str:
@@ -207,18 +230,35 @@ def crawl_site(args: argparse.Namespace) -> None:
     def add_external(link: dict, source_url: str, section: dict | None = None) -> None:
         if not link.get('url'):
             return
-        category = _external_category(link.get('label') or '', link['url'], cfg, section)
-        ext_id = stable_id(link['url'], link.get('label'), category)
+        link_url = normalize_url(link['url'], base_url)
+        resolved_url = None
+        redirect_status_code = None
+        redirect_error = None
+        category_url = link_url
+        if link.get('target_type') == 'redirect_link':
+            redirect = fetch_redirect_location(link_url, timeout=timeout)
+            redirect_status_code = redirect.status_code
+            redirect_error = redirect.error
+            if redirect.location:
+                resolved_url = normalize_url(redirect.location, base_url)
+                category_url = resolved_url
+        category = _external_category(link.get('label') or '', category_url, cfg, section)
+        ext_id = stable_id(link_url, resolved_url, link.get('label'), category)
         external_links_by_id[ext_id] = {
             'external_id': ext_id,
             'source_url': source_url,
             'source_section_id': section.get('section_id') if section else None,
             'label': link.get('label') or '',
-            'url': link['url'],
+            'url': resolved_url or link_url,
+            'source_redirect_url': link_url if resolved_url else None,
+            'redirect_status_code': redirect_status_code,
+            'redirect_error': redirect_error,
             'category': category,
             'recorded_at': now_iso(),
         }
-        add_outcome(link['url'], link.get('target_type'), f'{category}_recorded', source_url, link.get('label'), section.get('section_id') if section else None)
+        add_outcome(link_url, link.get('target_type'), f'{category}_recorded', source_url, link.get('label'), section.get('section_id') if section else None, redirect_status_code, redirect_error)
+        if resolved_url:
+            add_outcome(resolved_url, classify_url(resolved_url, base_url), f'{category}_recorded', link_url, link.get('label'), section.get('section_id') if section else None)
 
     def add_attachment(attachment: dict, source_url: str, section_id: str | None = None) -> None:
         attachments_by_id[attachment['attachment_id']] = attachment
@@ -235,11 +275,27 @@ def crawl_site(args: argparse.Namespace) -> None:
         add_outcome(base_url, 'homepage', 'crawled_homepage_ok', status_code=home_res.status_code)
         home_html = home_res.text
         nav_nodes = extract_nav_tree_from_homepage(home_html, base_url, base_url, site_id)
-        homepage_modules = extract_homepage_modules(home_html, base_url, base_url, site_id)
+        homepage_cfg = cfg.get('selectors', {}).get('homepage', {})
+        extracted_modules = extract_homepage_modules(
+            home_html,
+            base_url,
+            base_url,
+            site_id,
+            module_labels=homepage_cfg.get('module_labels'),
+            container_selectors=homepage_cfg.get('module_container_selectors'),
+        )
+        homepage_modules = []
+        seen_modules = set()
+        for module in _configured_homepage_modules(cfg, base_url, site_id) + extracted_modules:
+            key = (module.get('name'), module.get('list_url'))
+            if key in seen_modules:
+                continue
+            seen_modules.add(key)
+            homepage_modules.append(module)
         home_links, home_edges = extract_all_links(home_html, base_url, base_url)
         add_edges(home_edges)
         for link in home_links:
-            if link['target_type'] == 'external_link':
+            if link['target_type'] in {'external_link', 'redirect_link'}:
                 add_external(link, base_url)
             elif link['target_type'] == 'attachment_file':
                 add_attachment({
@@ -340,7 +396,32 @@ def crawl_site(args: argparse.Namespace) -> None:
         for attachment in atts:
             add_attachment(attachment, url, section['section_id'])
         for inline_link in page.get('inline_links', []):
-            if inline_link['target_type'] == 'external_link':
+            if inline_link['target_type'] in {'external_link', 'redirect_link'}:
+                add_external(inline_link, url, section)
+            elif inline_link['target_type'] == 'section_list_page' and same_domain(inline_link['url'], base_url):
+                queue_inline_section(inline_link, section, url)
+                add_outcome(inline_link['url'], inline_link['target_type'], 'inline_link_recorded', url, inline_link.get('label'), section['section_id'])
+            else:
+                add_outcome(inline_link['url'], inline_link['target_type'], 'inline_link_recorded', url, inline_link.get('label'), section['section_id'])
+        for image in page.get('inline_images', []):
+            add_outcome(image['url'], 'static_asset', 'inline_image_recorded', url, image.get('alt'), section['section_id'])
+
+    def record_section_content_page(url: str, section: dict, source_url: str, html: str, status_code: int | None = None) -> None:
+        url = normalize_url(url, base_url)
+        if url in detail_records_by_url:
+            return
+        page, atts, edges = extract_detail_page(html, url, base_url, site_id, section['section_id'])
+        if not (page.get('title') or page.get('content_text') or atts or page.get('inline_links') or page.get('inline_images')):
+            return
+        page['page_type'] = 'section_content_page'
+        page['source_page_type'] = 'section_list_page'
+        page['source_status_code'] = status_code
+        detail_records_by_url[url] = page
+        add_edges(edges)
+        for attachment in atts:
+            add_attachment(attachment, url, section['section_id'])
+        for inline_link in page.get('inline_links', []):
+            if inline_link['target_type'] in {'external_link', 'redirect_link'}:
                 add_external(inline_link, url, section)
             elif inline_link['target_type'] == 'section_list_page' and same_domain(inline_link['url'], base_url):
                 queue_inline_section(inline_link, section, url)
@@ -384,6 +465,8 @@ def crawl_site(args: argparse.Namespace) -> None:
                 'fetched_at': now_iso(),
             })
             add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
+            if not items:
+                record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
             for item in items:
                 target_type = item['target_type']
                 edge_id = stable_id(next_url, item['url'], item['title'], item.get('position', 0))
@@ -407,7 +490,7 @@ def crawl_site(args: argparse.Namespace) -> None:
                         'extension': item['url'].rsplit('.', 1)[-1].lower(),
                         'position': item.get('position', 0),
                     }, next_url, section_id)
-                elif target_type == 'external_link':
+                elif target_type in {'external_link', 'redirect_link'}:
                     add_external({'url': item['url'], 'label': item['title'], 'target_type': target_type}, next_url, section)
                 else:
                     add_outcome(item['url'], target_type, f'{target_type}_recorded', next_url, item['title'], section_id)
@@ -477,6 +560,8 @@ def crawl_site(args: argparse.Namespace) -> None:
                     'fetched_at': now_iso(),
                 })
                 add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
+                if not items:
+                    record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
                 for item in items:
                     target_type = item['target_type']
                     edge_id = stable_id(next_url, item['url'], item['title'], item.get('position', 0))
@@ -500,7 +585,7 @@ def crawl_site(args: argparse.Namespace) -> None:
                             'extension': item['url'].rsplit('.', 1)[-1].lower(),
                             'position': item.get('position', 0),
                         }, next_url, section_id)
-                    elif target_type == 'external_link':
+                    elif target_type in {'external_link', 'redirect_link'}:
                         add_external({'url': item['url'], 'label': item['title'], 'target_type': target_type}, next_url, section)
                     else:
                         add_outcome(item['url'], target_type, f'{target_type}_recorded', next_url, item['title'], section_id)

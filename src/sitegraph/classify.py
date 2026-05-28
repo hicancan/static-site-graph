@@ -34,7 +34,9 @@ def classify_url(url: str, base_url: str) -> str:
     if not same_domain(url, base_url):
         return 'external_link'
     path = parsed.path.lower()
-    if path.endswith('/list.htm') or '/list' in path and path.endswith('.htm'):
+    if path.rstrip('/') == '/_redirect':
+        return 'redirect_link'
+    if path.endswith('/list.htm') or path.endswith('/list.psp') or ('/list' in path and path.endswith(('.htm', '.psp'))):
         return 'section_list_page'
     if '/20' in path and (path.endswith('/page.htm') or path.endswith('/page.psp')):
         return 'detail_article_page'
