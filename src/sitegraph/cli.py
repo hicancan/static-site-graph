@@ -331,6 +331,18 @@ def crawl_site(args: argparse.Namespace) -> None:
         attachments_by_id[attachment['attachment_id']] = attachment
         add_outcome(attachment['url'], 'attachment_file', 'attachment_metadata_only', source_url, attachment.get('name'), section_id)
 
+    def backfill_external_records_from_known_details() -> None:
+        if not incremental:
+            return
+        for page in list(detail_records_by_url.values()):
+            source_url = page.get('url')
+            if not source_url:
+                continue
+            section = {'section_id': page.get('section_id'), 'business_tags': []}
+            for link in page.get('inline_links') or []:
+                if link.get('target_type') in {'external_link', 'redirect_link'}:
+                    add_external(link, source_url, section)
+
     def remove_records_from_source(source_url: str) -> None:
         source_url = normalize_url(source_url, base_url)
         for attachment_id, attachment in list(attachments_by_id.items()):
@@ -342,6 +354,8 @@ def crawl_site(args: argparse.Namespace) -> None:
         for edge_id, edge in list(edges_by_id.items()):
             if normalize_url(edge.get('from_url', ''), base_url) == source_url:
                 edges_by_id.pop(edge_id, None)
+
+    backfill_external_records_from_known_details()
 
     home_res = fetch(base_url)
     if home_res.error or (home_res.status_code and home_res.status_code >= 400):

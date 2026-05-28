@@ -17,7 +17,10 @@ def detail_html(title: str, date: str = '2026-05-02') -> str:
       <body>
         <h1 class="arti_title">{title}</h1>
         <div>发布者：admin 发布时间：{date} 浏览次数：1</div>
-        <div class="wp_articlecontent">{CONTENT}</div>
+        <div class="wp_articlecontent">
+          {CONTENT}
+          <a href="https://external.example.edu/system">External system</a>
+        </div>
       </body>
     </html>
     '''
@@ -124,6 +127,7 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
         'pagination': {'type': 'next_link'},
     })
     sections_path.write_text(json.dumps(sections, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    (out / 'external_links.jsonl').write_text('', encoding='utf-8')
 
     pages['https://demo.example.edu/1/list.htm'] = list_html(
         [
@@ -140,6 +144,7 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
     assert 'https://demo.example.edu/2026/0502/c1a2/page.htm' not in counts
     assert (out / 'detail_pages.jsonl').read_text(encoding='utf-8').count('New notice C') == 1
     assert 'demo_old_section' in (out / 'sections.json').read_text(encoding='utf-8')
+    assert 'https://external.example.edu/system' in (out / 'external_links.jsonl').read_text(encoding='utf-8')
 
     snapshot = {path.name: path.read_text(encoding='utf-8') for path in out.iterdir() if path.is_file()}
     counts.clear()
