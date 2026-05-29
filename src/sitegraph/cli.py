@@ -5,6 +5,14 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from .crawl_output import (
+    CrawlOutputPackage,
+    finalize_crawl_output,
+    read_json,
+    read_jsonl,
+    write_homepage_outputs,
+    write_site_metadata,
+)
 from .crawl_state import CrawlState
 from .config import load_yaml
 from .fetch import fetch_html
@@ -18,47 +26,7 @@ from .extract import (
     discover_next_url,
 )
 from .classify import same_domain
-from .util import now_iso, stable_id, write_json, write_jsonl, normalize_url
-
-
-VOLATILE_OUTPUT_KEYS = {'created_at', 'generated_at', 'fetched_at', 'recorded_at'}
-
-
-def _read_json(path: Path, default):
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding='utf-8'))
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
-
-
-def _without_volatile(value):
-    if isinstance(value, dict):
-        return {key: _without_volatile(item) for key, item in value.items() if key not in VOLATILE_OUTPUT_KEYS}
-    if isinstance(value, list):
-        return [_without_volatile(item) for item in value]
-    return value
-
-
-def _canonical_record_list(records: list[dict]) -> list[dict]:
-    normalized = [_without_volatile(record) for record in records]
-    return sorted(normalized, key=lambda record: json.dumps(record, ensure_ascii=False, sort_keys=True))
-
-
-def _write_json_preserving_volatile(path: Path, payload: object, preserve_volatile: bool) -> None:
-    if preserve_volatile and path.exists() and _without_volatile(_read_json(path, None)) == _without_volatile(payload):
-        return
-    write_json(path, payload)
-
-
-def _write_jsonl_preserving_volatile(path: Path, records: list[dict], preserve_volatile: bool) -> None:
-    if preserve_volatile and path.exists() and _canonical_record_list(_read_jsonl(path)) == _canonical_record_list(records):
-        return
-    write_jsonl(path, records)
+from .util import now_iso, stable_id, write_json, normalize_url
 
 
 def validate_config(args: argparse.Namespace) -> None:
@@ -173,17 +141,9 @@ def crawl_site(args: argparse.Namespace) -> None:
         return
 
     out_root.mkdir(parents=True, exist_ok=True)
-    old_manifest = _read_json(out_root / 'manifest.json', {}) if incremental else {}
+    old_manifest = read_json(out_root / 'manifest.json', {}) if incremental else {}
 
-    _write_json_preserving_volatile(out_root / 'site.json', {
-        'site_id': site_id,
-        'name': site['name'],
-        'base_url': base_url,
-        'domain': site['domain'],
-        'adapter': site['adapter'],
-        'created_at': now_iso(),
-        'notes': site.get('notes', ''),
-    }, incremental)
+    write_site_metadata(out_root, site=site, site_id=site_id, base_url=base_url, incremental=incremental)
 
     manifest = {
         'site_id': site_id,
@@ -197,23 +157,23 @@ def crawl_site(args: argparse.Namespace) -> None:
     initial_known_urls = set(manifest['url_outcomes'])
     detail_records_by_url: dict[str, dict] = {
         normalize_url(record['url'], base_url): record
-        for record in _read_jsonl(out_root / 'detail_pages.jsonl')
+        for record in read_jsonl(out_root / 'detail_pages.jsonl')
     } if incremental else {}
     attachments_by_id: dict[str, dict] = {
         record['attachment_id']: record
-        for record in _read_jsonl(out_root / 'attachments.jsonl')
+        for record in read_jsonl(out_root / 'attachments.jsonl')
     } if incremental else {}
     external_links_by_id: dict[str, dict] = {
         record['external_id']: record
-        for record in _read_jsonl(out_root / 'external_links.jsonl')
+        for record in read_jsonl(out_root / 'external_links.jsonl')
     } if incremental else {}
     edges_by_id: dict[str, dict] = {
         record['edge_id']: record
-        for record in _read_jsonl(out_root / 'edges.jsonl')
+        for record in read_jsonl(out_root / 'edges.jsonl')
     } if incremental else {}
     list_pages_by_url: dict[str, dict] = {
         normalize_url(record['url'], base_url): record
-        for record in _read_jsonl(out_root / 'list_pages.jsonl')
+        for record in read_jsonl(out_root / 'list_pages.jsonl')
     } if incremental else {}
 
     state = CrawlState(
@@ -284,8 +244,13 @@ def crawl_site(args: argparse.Namespace) -> None:
             else:
                 add_outcome(link['url'], link['target_type'], 'homepage_link_recorded', base_url, link.get('label'))
 
-    _write_json_preserving_volatile(out_root / 'nav_tree.json', {'site_id': site_id, 'generated_at': now_iso(), 'nodes': nav_nodes}, incremental)
-    _write_json_preserving_volatile(out_root / 'homepage_modules.json', {'site_id': site_id, 'generated_at': now_iso(), 'modules': homepage_modules}, incremental)
+    write_homepage_outputs(
+        out_root,
+        site_id=site_id,
+        nav_nodes=nav_nodes,
+        homepage_modules=homepage_modules,
+        incremental=incremental,
+    )
 
     sections_by_url: dict[str, dict] = {}
 
@@ -544,45 +509,21 @@ def crawl_site(args: argparse.Namespace) -> None:
             section_index += 1
             crawl_list_section(section)
 
-    sections_for_output = sections_out + extra_report_sections
-    if incremental:
-        sections_by_id = {
-            section['section_id']: section
-            for section in _read_json(out_root / 'sections.json', [])
-            if isinstance(section, dict) and section.get('section_id')
-        }
-        for section in sections_for_output:
-            sections_by_id[section['section_id']] = section
-        sections_for_output = list(sections_by_id.values())
-    _write_json_preserving_volatile(out_root / 'sections.json', sections_for_output, incremental)
-    _write_jsonl_preserving_volatile(out_root / 'list_pages.jsonl', list(list_pages_by_url.values()), incremental)
-    _write_jsonl_preserving_volatile(out_root / 'detail_pages.jsonl', list(detail_records_by_url.values()), incremental)
-    _write_jsonl_preserving_volatile(out_root / 'attachments.jsonl', list(attachments_by_id.values()), incremental)
-    _write_jsonl_preserving_volatile(out_root / 'external_links.jsonl', list(external_links_by_id.values()), incremental)
-    _write_jsonl_preserving_volatile(out_root / 'edges.jsonl', list(edges_by_id.values()), incremental)
-
-    outcome_counts = Counter(item['outcome'] for item in manifest['url_outcomes'].values())
-    manifest['totals'] = {
-        'sections': len(sections_for_output),
-        'nav_nodes': len(nav_nodes),
-        'homepage_modules': len(homepage_modules),
-        'list_pages': len(list_pages_by_url),
-        'detail_pages': len(detail_records_by_url),
-        'low_content_detail_pages': sum(1 for page in detail_records_by_url.values() if page.get('content_status') == 'low_content'),
-        'attachments': len(attachments_by_id),
-        'external_links': len(external_links_by_id),
-        'edges': len(edges_by_id),
-        'url_outcomes': len(manifest['url_outcomes']),
-    }
-    manifest['outcomes'] = dict(sorted(outcome_counts.items()))
-    manifest['quality'] = {
-        'all_discovered_urls_have_outcomes': True,
-        'errors': len(manifest['errors']),
-        'attachment_policy': cfg.get('crawl_policy', {}).get('attachment_policy', 'metadata_only'),
-        'external_link_policy': cfg.get('crawl_policy', {}).get('external_link_policy', 'record_only'),
-    }
-    _write_json_preserving_volatile(out_root / 'manifest.json', manifest, incremental)
-    print(json.dumps(manifest['totals'], ensure_ascii=False, indent=2))
+    totals = finalize_crawl_output(CrawlOutputPackage(
+        cfg=cfg,
+        out_root=out_root,
+        incremental=incremental,
+        manifest=manifest,
+        nav_nodes=nav_nodes,
+        homepage_modules=homepage_modules,
+        sections=sections_out + extra_report_sections,
+        list_pages_by_url=list_pages_by_url,
+        detail_records_by_url=detail_records_by_url,
+        attachments_by_id=attachments_by_id,
+        external_links_by_id=external_links_by_id,
+        edges_by_id=edges_by_id,
+    ))
+    print(json.dumps(totals, ensure_ascii=False, indent=2))
 
 
 def discover_homepage(args: argparse.Namespace) -> None:
