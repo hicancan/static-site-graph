@@ -13,16 +13,14 @@ from .crawl_output import (
     write_homepage_outputs,
     write_site_metadata,
 )
+from .crawl_homepage import crawl_homepage
 from .crawl_sections import discover_sections_from_homepage
 from .crawl_state import CrawlState
 from .config import load_yaml
 from .fetch import fetch_html
 from .extract import (
-    extract_all_links,
     extract_detail_page,
-    extract_homepage_modules,
     extract_list_items,
-    extract_nav_tree_from_homepage,
     extract_pagination_metadata,
     discover_next_url,
 )
@@ -52,29 +50,6 @@ def _dedupe_records(records: list[dict], *keys: str) -> list[dict]:
         seen.add(key)
         out.append(record)
     return out
-
-
-def _configured_homepage_modules(cfg: dict, base_url: str, site_id: str) -> list[dict]:
-    modules = []
-    for idx, item in enumerate(cfg.get('homepage_modules', [])):
-        name = item.get('name')
-        list_url = item.get('list_url') or item.get('url')
-        if not name or not list_url:
-            continue
-        list_url = normalize_url(list_url, base_url)
-        modules.append({
-            'module_id': item.get('module_id') or f'{site_id}_home_module_{stable_id(name, list_url, length=12)}',
-            'site_id': site_id,
-            'name': name,
-            'url': normalize_url(item.get('homepage_url') or base_url, base_url),
-            'list_url': list_url,
-            'container_selector': item.get('container_selector'),
-            'link_count': item.get('link_count'),
-            'position': item.get('position', idx),
-            'source': item.get('source', 'config'),
-            'notes': item.get('notes'),
-        })
-    return modules
 
 
 def crawl_site(args: argparse.Namespace) -> None:
@@ -155,51 +130,10 @@ def crawl_site(args: argparse.Namespace) -> None:
 
     state.backfill_external_records_from_known_details()
 
-    home_res = fetch(base_url)
-    if home_res.error or (home_res.status_code and home_res.status_code >= 400):
-        manifest['errors'].append({'url': base_url, 'status_code': home_res.status_code, 'error': home_res.error or f'HTTP {home_res.status_code}', 'phase': 'homepage'})
-        add_outcome(base_url, 'homepage', 'error', status_code=home_res.status_code, error=home_res.error)
-        home_html = ''
-        nav_nodes = []
-        homepage_modules = []
-    else:
-        add_outcome(base_url, 'homepage', 'crawled_homepage_ok', status_code=home_res.status_code)
-        home_html = home_res.text
-        nav_nodes = extract_nav_tree_from_homepage(home_html, base_url, base_url, site_id)
-        homepage_cfg = cfg.get('selectors', {}).get('homepage', {})
-        extracted_modules = extract_homepage_modules(
-            home_html,
-            base_url,
-            base_url,
-            site_id,
-            module_labels=homepage_cfg.get('module_labels'),
-            container_selectors=homepage_cfg.get('module_container_selectors'),
-        )
-        homepage_modules = []
-        seen_modules = set()
-        for module in _configured_homepage_modules(cfg, base_url, site_id) + extracted_modules:
-            key = (module.get('name'), module.get('list_url'))
-            if key in seen_modules:
-                continue
-            seen_modules.add(key)
-            homepage_modules.append(module)
-        remove_records_from_source(base_url)
-        home_links, home_edges = extract_all_links(home_html, base_url, base_url)
-        add_edges(home_edges)
-        for link in home_links:
-            if link['target_type'] in {'external_link', 'redirect_link'}:
-                add_external(link, base_url)
-            elif link['target_type'] == 'attachment_file':
-                add_attachment({
-                    'attachment_id': stable_id(base_url, link['url'], link['label']),
-                    'parent_url': base_url,
-                    'name': link['label'] or link['url'].rsplit('/', 1)[-1],
-                    'url': link['url'],
-                    'extension': link['url'].rsplit('.', 1)[-1].lower(),
-                    'position': link.get('position', 0),
-                }, base_url)
-            else:
-                add_outcome(link['url'], link['target_type'], 'homepage_link_recorded', base_url, link.get('label'))
+    homepage = crawl_homepage(cfg, base_url=base_url, site_id=site_id, state=state)
+    home_html = homepage.home_html
+    nav_nodes = homepage.nav_nodes
+    homepage_modules = homepage.homepage_modules
 
     write_homepage_outputs(
         out_root,
