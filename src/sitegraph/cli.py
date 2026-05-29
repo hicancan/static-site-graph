@@ -4,10 +4,10 @@ import argparse
 import json
 from collections import Counter
 from pathlib import Path
-from urllib.parse import urlparse
 
+from .crawl_state import CrawlState
 from .config import load_yaml
-from .fetch import fetch_html, fetch_redirect_location
+from .fetch import fetch_html
 from .extract import (
     extract_all_links,
     extract_detail_page,
@@ -17,7 +17,7 @@ from .extract import (
     extract_pagination_metadata,
     discover_next_url,
 )
-from .classify import classify_url, same_domain
+from .classify import same_domain
 from .util import now_iso, stable_id, write_json, write_jsonl, normalize_url
 
 
@@ -152,39 +152,6 @@ def _configured_homepage_modules(cfg: dict, base_url: str, site_id: str) -> list
     return modules
 
 
-def _external_category(label: str, url: str, cfg: dict, section: dict | None = None) -> str:
-    link_cfg = cfg.get('link_classification', {})
-    if label in set(link_cfg.get('external_system_labels', [])):
-        return 'external_system_link'
-    host = urlparse(url).netloc.lower()
-    path = urlparse(url).path.lower()
-    if any(domain in host for domain in link_cfg.get('external_policy_domains', [])):
-        return 'external_policy_link'
-    if '/20' in path and path.endswith('/page.htm'):
-        return 'cross_domain_article_link'
-    if section and 'policy' in set(section.get('business_tags', [])):
-        return 'external_policy_link'
-    return 'external_link'
-
-
-def _outcome_priority(outcome: str) -> int:
-    if outcome == 'error':
-        return 100
-    if outcome.startswith('crawled_'):
-        return 90
-    if outcome == 'attachment_metadata_only':
-        return 80
-    if outcome.endswith('_recorded') and ('external' in outcome or 'cross_domain' in outcome):
-        return 70
-    if outcome == 'inline_image_recorded':
-        return 60
-    if outcome == 'inline_link_recorded':
-        return 50
-    if outcome == 'homepage_link_recorded':
-        return 40
-    return 30
-
-
 def crawl_site(args: argparse.Namespace) -> None:
     cfg = load_yaml(args.config)
     site = cfg['site']
@@ -228,7 +195,6 @@ def crawl_site(args: argparse.Namespace) -> None:
         'url_outcomes': dict(old_manifest.get('url_outcomes', {})) if incremental else {},
     }
     initial_known_urls = set(manifest['url_outcomes'])
-    fetch_cache = {}
     detail_records_by_url: dict[str, dict] = {
         normalize_url(record['url'], base_url): record
         for record in _read_jsonl(out_root / 'detail_pages.jsonl')
@@ -250,112 +216,27 @@ def crawl_site(args: argparse.Namespace) -> None:
         for record in _read_jsonl(out_root / 'list_pages.jsonl')
     } if incremental else {}
 
-    def fetch(url: str):
-        url = normalize_url(url, base_url)
-        if url not in fetch_cache:
-            res = fetch_html(url, timeout=timeout)
-            if res.error and 'timed out' in res.error.lower() and timeout < 60:
-                res = fetch_html(url, timeout=60)
-            retry_count = 0
-            while res.status_code is not None and 500 <= res.status_code < 600 and retry_count < 3:
-                retry_count += 1
-                res = fetch_html(url, timeout=max(timeout, 60))
-            fetch_cache[url] = res
-        return fetch_cache[url]
+    state = CrawlState(
+        cfg=cfg,
+        base_url=base_url,
+        timeout=timeout,
+        incremental=incremental,
+        manifest=manifest,
+        initial_known_urls=initial_known_urls,
+        detail_records_by_url=detail_records_by_url,
+        attachments_by_id=attachments_by_id,
+        external_links_by_id=external_links_by_id,
+        edges_by_id=edges_by_id,
+        fetch_html_fn=fetch_html,
+    )
+    fetch = state.fetch
+    add_outcome = state.add_outcome
+    add_edges = state.add_edges
+    add_external = state.add_external
+    add_attachment = state.add_attachment
+    remove_records_from_source = state.remove_records_from_source
 
-    def add_outcome(url: str, target_type: str | None = None, outcome: str = 'recorded', source_url: str | None = None, label: str | None = None, section_id: str | None = None, status_code: int | None = None, error: str | None = None) -> None:
-        url = normalize_url(url, base_url)
-        target_type = target_type or classify_url(url, base_url)
-        if not url or target_type == 'non_http_link':
-            return
-        record = manifest['url_outcomes'].setdefault(url, {
-            'url': url,
-            'target_type': target_type,
-            'outcome': outcome,
-            'labels': [],
-            'sources': [],
-            'section_ids': [],
-        })
-        record['target_type'] = target_type
-        if _outcome_priority(outcome) >= _outcome_priority(record.get('outcome', '')):
-            record['outcome'] = outcome
-        if label and label not in record['labels'][:8]:
-            record['labels'].append(label)
-        if source_url and source_url not in record['sources'][:8]:
-            record['sources'].append(source_url)
-        if section_id and section_id not in record['section_ids']:
-            record['section_ids'].append(section_id)
-        if status_code is not None:
-            record['status_code'] = status_code
-        if error:
-            record['error'] = error
-
-    def add_edges(edges: list[dict]) -> None:
-        for edge in edges:
-            edges_by_id[edge['edge_id']] = edge
-
-    def add_external(link: dict, source_url: str, section: dict | None = None) -> None:
-        if not link.get('url'):
-            return
-        link_url = normalize_url(link['url'], base_url)
-        resolved_url = None
-        redirect_status_code = None
-        redirect_error = None
-        category_url = link_url
-        if link.get('target_type') == 'redirect_link':
-            redirect = fetch_redirect_location(link_url, timeout=timeout)
-            redirect_status_code = redirect.status_code
-            redirect_error = redirect.error
-            if redirect.location:
-                resolved_url = normalize_url(redirect.location, base_url)
-                category_url = resolved_url
-        category = _external_category(link.get('label') or '', category_url, cfg, section)
-        ext_id = stable_id(link_url, resolved_url, link.get('label'), category)
-        external_links_by_id[ext_id] = {
-            'external_id': ext_id,
-            'source_url': source_url,
-            'source_section_id': section.get('section_id') if section else None,
-            'label': link.get('label') or '',
-            'url': resolved_url or link_url,
-            'source_redirect_url': link_url if resolved_url else None,
-            'redirect_status_code': redirect_status_code,
-            'redirect_error': redirect_error,
-            'category': category,
-            'recorded_at': now_iso(),
-        }
-        add_outcome(link_url, link.get('target_type'), f'{category}_recorded', source_url, link.get('label'), section.get('section_id') if section else None, redirect_status_code, redirect_error)
-        if resolved_url:
-            add_outcome(resolved_url, classify_url(resolved_url, base_url), f'{category}_recorded', link_url, link.get('label'), section.get('section_id') if section else None)
-
-    def add_attachment(attachment: dict, source_url: str, section_id: str | None = None) -> None:
-        attachments_by_id[attachment['attachment_id']] = attachment
-        add_outcome(attachment['url'], 'attachment_file', 'attachment_metadata_only', source_url, attachment.get('name'), section_id)
-
-    def backfill_external_records_from_known_details() -> None:
-        if not incremental:
-            return
-        for page in list(detail_records_by_url.values()):
-            source_url = page.get('url')
-            if not source_url:
-                continue
-            section = {'section_id': page.get('section_id'), 'business_tags': []}
-            for link in page.get('inline_links') or []:
-                if link.get('target_type') in {'external_link', 'redirect_link'}:
-                    add_external(link, source_url, section)
-
-    def remove_records_from_source(source_url: str) -> None:
-        source_url = normalize_url(source_url, base_url)
-        for attachment_id, attachment in list(attachments_by_id.items()):
-            if normalize_url(attachment.get('parent_url', ''), base_url) == source_url:
-                attachments_by_id.pop(attachment_id, None)
-        for external_id, external in list(external_links_by_id.items()):
-            if normalize_url(external.get('source_url', ''), base_url) == source_url:
-                external_links_by_id.pop(external_id, None)
-        for edge_id, edge in list(edges_by_id.items()):
-            if normalize_url(edge.get('from_url', ''), base_url) == source_url:
-                edges_by_id.pop(edge_id, None)
-
-    backfill_external_records_from_known_details()
+    state.backfill_external_records_from_known_details()
 
     home_res = fetch(base_url)
     if home_res.error or (home_res.status_code and home_res.status_code >= 400):
