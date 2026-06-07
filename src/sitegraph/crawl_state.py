@@ -8,6 +8,9 @@ from .classify import classify_url
 from .fetch import FetchResult, fetch_html, fetch_redirect_location
 from .util import normalize_url, now_iso, stable_id
 
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+MAX_FETCH_ATTEMPTS = 4
+
 
 def external_category(label: str, url: str, cfg: dict, section: dict | None = None) -> str:
     link_cfg = cfg.get('link_classification', {})
@@ -62,14 +65,20 @@ class CrawlState:
         url = normalize_url(url, self.base_url)
         if url not in self.fetch_cache:
             res = self.fetch_html_fn(url, timeout=self.timeout)
-            if res.error and 'timed out' in res.error.lower() and self.timeout < 60:
-                res = self.fetch_html_fn(url, timeout=60)
-            retry_count = 0
-            while res.status_code is not None and 500 <= res.status_code < 600 and retry_count < 3:
-                retry_count += 1
+            attempt_count = 1
+            while self._should_retry_fetch(res) and attempt_count < MAX_FETCH_ATTEMPTS:
+                attempt_count += 1
                 res = self.fetch_html_fn(url, timeout=max(self.timeout, 60))
             self.fetch_cache[url] = res
         return self.fetch_cache[url]
+
+    @staticmethod
+    def _should_retry_fetch(res: FetchResult) -> bool:
+        if res.error:
+            return True
+        if res.status_code is None:
+            return False
+        return res.status_code in RETRYABLE_STATUS_CODES
 
     def add_outcome(
         self,
