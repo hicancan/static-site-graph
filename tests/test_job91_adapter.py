@@ -58,6 +58,6 @@ def test_job91_adapter_writes_current_sitegraph_contract(tmp_path, monkeypatch):
 
     totals = crawl_job91_site(cfg, out_root=tmp_path / "index")
 
-    assert totals["detail_pages"] == 2
+    assert totals["detail_pages"] == 1
     assert (tmp_path / "index" / "manifest.json").exists()
     assert "南京邮电大学春季招聘会" in (tmp_path / "index" / "detail_pages.jsonl").read_text(encoding="utf-8")

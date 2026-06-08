@@ -145,7 +145,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
 
     sections: list[dict[str, Any]] = []
     list_pages: list[dict[str, Any]] = []
-    detail_pages: list[dict[str, Any]] = []
+    detail_pages_by_url: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     url_outcomes: dict[str, dict[str, Any]] = {}
     root_url = base_url + "/"
@@ -220,7 +220,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
                 if "zphid" in item or "zphmc" in item
                 else _news_record(base_url, site_id, section, item, position)
             )
-            detail_pages.append(page)
+            detail_pages_by_url.setdefault(page["url"], page)
             edges.append({
                 "edge_id": stable_id(section_url, page["url"], page["title"], position),
                 "from_url": section_url,
@@ -230,15 +230,23 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
                 "target_type": "detail_article_page",
                 "same_domain": True,
             })
-            url_outcomes[page["url"]] = {
+            outcome_record = url_outcomes.setdefault(page["url"], {
                 "url": page["url"],
                 "target_type": "detail_article_page",
                 "outcome": "crawled_detail_ok",
-                "labels": [page["title"]],
-                "sources": [section_url],
-                "section_ids": [section_id],
+                "labels": [],
+                "sources": [],
+                "section_ids": [],
                 "status_code": 200,
-            }
+            })
+            outcome_record["target_type"] = "detail_article_page"
+            outcome_record["outcome"] = "crawled_detail_ok"
+            if page["title"] not in outcome_record["labels"][:8]:
+                outcome_record["labels"].append(page["title"])
+            if section_url not in outcome_record["sources"][:8]:
+                outcome_record["sources"].append(section_url)
+            if section_id not in outcome_record["section_ids"]:
+                outcome_record["section_ids"].append(section_id)
 
     nav_nodes = [
         {
@@ -274,6 +282,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
     write_json(out_root / "homepage_modules.json", {"site_id": site_id, "generated_at": now_iso(), "modules": homepage_modules})
     write_json(out_root / "sections.json", sections)
     write_jsonl(out_root / "list_pages.jsonl", list_pages)
+    detail_pages = list(detail_pages_by_url.values())
     write_jsonl(out_root / "detail_pages.jsonl", detail_pages)
     write_jsonl(out_root / "attachments.jsonl", [])
     write_jsonl(out_root / "external_links.jsonl", [])
