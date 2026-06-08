@@ -109,8 +109,46 @@ def merge_incremental_sections(out_root: Path, sections: list[dict], incremental
     return list(sections_by_id.values())
 
 
+def _is_graph_passive_edge(edge: dict) -> bool:
+    return edge.get('target_type') in {'static_asset', 'non_http_link', 'template_placeholder_link'}
+
+
+def _backfill_inline_image_outcomes(package: CrawlOutputPackage) -> None:
+    for page in package.detail_records_by_url.values():
+        page_url = page.get('url')
+        section_id = page.get('section_id')
+        for image in page.get('inline_images') or []:
+            url = image.get('url')
+            if not url:
+                continue
+            record = package.manifest['url_outcomes'].setdefault(url, {
+                'url': url,
+                'target_type': 'static_asset',
+                'outcome': 'inline_image_recorded',
+                'labels': [],
+                'sources': [],
+                'section_ids': [],
+            })
+            record['target_type'] = 'static_asset'
+            if record.get('outcome') != 'crawled_detail_ok':
+                record['outcome'] = 'inline_image_recorded'
+            label = image.get('alt')
+            if label and label not in record['labels'][:8]:
+                record['labels'].append(label)
+            if page_url and page_url not in record['sources'][:8]:
+                record['sources'].append(page_url)
+            if section_id and section_id not in record['section_ids']:
+                record['section_ids'].append(section_id)
+
+
 def finalize_crawl_output(package: CrawlOutputPackage) -> dict:
     sections_for_output = merge_incremental_sections(package.out_root, package.sections, package.incremental)
+    package.edges_by_id = {
+        edge_id: edge
+        for edge_id, edge in package.edges_by_id.items()
+        if not _is_graph_passive_edge(edge)
+    }
+    _backfill_inline_image_outcomes(package)
     write_json_preserving_volatile(package.out_root / 'sections.json', sections_for_output, package.incremental)
     write_jsonl_preserving_volatile(package.out_root / 'list_pages.jsonl', list(package.list_pages_by_url.values()), package.incremental)
     write_jsonl_preserving_volatile(package.out_root / 'detail_pages.jsonl', list(package.detail_records_by_url.values()), package.incremental)

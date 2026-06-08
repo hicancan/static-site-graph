@@ -93,6 +93,8 @@ def _iter_scoped_anchors(soup: BeautifulSoup, container_selector: str | None = N
 def _is_skippable_link(url: str, label: str, base_url: str) -> bool:
     if not url or classify_url(url, base_url) == 'non_http_link':
         return True
+    if '{' in url or '}' in url:
+        return True
     if not label:
         return True
     if label in SKIP_LINK_TEXT:
@@ -114,7 +116,7 @@ def extract_all_links(html: str, page_url: str, base_url: str, container_selecto
         kind = classify_url(url, base_url)
         if kind == 'non_http_link':
             continue
-        if not label and kind == 'static_asset':
+        if kind == 'static_asset':
             continue
         links.append({'url': url, 'label': label, 'target_type': kind, 'position': idx})
         edges.append({

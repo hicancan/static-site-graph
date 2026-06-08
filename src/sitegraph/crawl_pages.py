@@ -44,6 +44,8 @@ class CrawlPageRunner:
         return section_index
 
     def queue_inline_section(self, link: dict, source_section: dict, source_url: str) -> None:
+        if self.cfg.get('crawl_policy', {}).get('follow_inline_section_links', True) is not True:
+            return
         url = normalize_url(link['url'], self.base_url)
         if url in self.queued_section_urls:
             return
@@ -254,6 +256,8 @@ class CrawlPageRunner:
         return frontier_remaining
 
     def _crawl_direct_detail_backfill(self, section_index: int) -> None:
+        if self.cfg.get('crawl_policy', {}).get('direct_detail_backfill', True) is not True:
+            return
         direct_detail_section = {
             'section_id': f'{self.site_id}_direct_detail_links',
             'site_id': self.site_id,

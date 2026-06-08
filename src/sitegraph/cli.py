@@ -13,6 +13,7 @@ from .crawl_output import (
     write_site_metadata,
 )
 from .crawl_homepage import crawl_homepage
+from .crawl_job91 import crawl_job91_site
 from .crawl_pages import CrawlPageRunner
 from .crawl_sections import discover_sections_from_homepage
 from .crawl_state import CrawlState
@@ -64,6 +65,11 @@ def crawl_site(args: argparse.Namespace) -> None:
             'sections': len(cfg.get('sections', [])),
             'incremental': bool(getattr(args, 'incremental', False)),
         }, ensure_ascii=False, indent=2))
+        return
+
+    if site.get('adapter') == 'job91_api':
+        totals = crawl_job91_site(cfg, out_root=out_root, dry_run=False)
+        print(json.dumps(totals, ensure_ascii=False, indent=2))
         return
 
     out_root.mkdir(parents=True, exist_ok=True)
