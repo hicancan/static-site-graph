@@ -6,6 +6,12 @@ from urllib.parse import urlparse
 
 from .classify import classify_url
 from .fetch import FetchResult, fetch_html, fetch_redirect_location
+from .outcomes import (
+    MAX_OUTCOME_LABELS,
+    MAX_OUTCOME_SECTION_IDS,
+    MAX_OUTCOME_SOURCES,
+    append_limited_unique,
+)
 from .util import normalize_url, now_iso, stable_id
 
 RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -106,12 +112,9 @@ class CrawlState:
         record['target_type'] = target_type
         if outcome_priority(outcome) >= outcome_priority(record.get('outcome', '')):
             record['outcome'] = outcome
-        if label and label not in record['labels'][:8]:
-            record['labels'].append(label)
-        if source_url and source_url not in record['sources'][:8]:
-            record['sources'].append(source_url)
-        if section_id and section_id not in record['section_ids']:
-            record['section_ids'].append(section_id)
+        append_limited_unique(record, 'labels', label, MAX_OUTCOME_LABELS)
+        append_limited_unique(record, 'sources', source_url, MAX_OUTCOME_SOURCES)
+        append_limited_unique(record, 'section_ids', section_id, MAX_OUTCOME_SECTION_IDS)
         if status_code is not None:
             record['status_code'] = status_code
         if error:

@@ -5,6 +5,13 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from .outcomes import (
+    MAX_OUTCOME_LABELS,
+    MAX_OUTCOME_SECTION_IDS,
+    MAX_OUTCOME_SOURCES,
+    append_limited_unique,
+    compact_url_outcomes,
+)
 from .util import now_iso, write_json, write_jsonl
 
 
@@ -133,12 +140,9 @@ def _backfill_inline_image_outcomes(package: CrawlOutputPackage) -> None:
             if record.get('outcome') != 'crawled_detail_ok':
                 record['outcome'] = 'inline_image_recorded'
             label = image.get('alt')
-            if label and label not in record['labels'][:8]:
-                record['labels'].append(label)
-            if page_url and page_url not in record['sources'][:8]:
-                record['sources'].append(page_url)
-            if section_id and section_id not in record['section_ids']:
-                record['section_ids'].append(section_id)
+            append_limited_unique(record, 'labels', label, MAX_OUTCOME_LABELS)
+            append_limited_unique(record, 'sources', page_url, MAX_OUTCOME_SOURCES)
+            append_limited_unique(record, 'section_ids', section_id, MAX_OUTCOME_SECTION_IDS)
 
 
 def finalize_crawl_output(package: CrawlOutputPackage) -> dict:
@@ -149,6 +153,7 @@ def finalize_crawl_output(package: CrawlOutputPackage) -> dict:
         if not _is_graph_passive_edge(edge)
     }
     _backfill_inline_image_outcomes(package)
+    package.manifest['url_outcomes'] = compact_url_outcomes(package.manifest.get('url_outcomes'))
     write_json_preserving_volatile(package.out_root / 'sections.json', sections_for_output, package.incremental)
     write_jsonl_preserving_volatile(package.out_root / 'list_pages.jsonl', list(package.list_pages_by_url.values()), package.incremental)
     write_jsonl_preserving_volatile(package.out_root / 'detail_pages.jsonl', list(package.detail_records_by_url.values()), package.incremental)

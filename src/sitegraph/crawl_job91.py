@@ -11,6 +11,13 @@ import requests
 
 from .crawl_output import write_site_metadata
 from .fetch import DEFAULT_HEADERS
+from .outcomes import (
+    MAX_OUTCOME_LABELS,
+    MAX_OUTCOME_SECTION_IDS,
+    MAX_OUTCOME_SOURCES,
+    append_limited_unique,
+    compact_url_outcomes,
+)
 from .util import now_iso, stable_id, write_json, write_jsonl
 
 
@@ -241,12 +248,9 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             })
             outcome_record["target_type"] = "detail_article_page"
             outcome_record["outcome"] = "crawled_detail_ok"
-            if page["title"] not in outcome_record["labels"][:8]:
-                outcome_record["labels"].append(page["title"])
-            if section_url not in outcome_record["sources"][:8]:
-                outcome_record["sources"].append(section_url)
-            if section_id not in outcome_record["section_ids"]:
-                outcome_record["section_ids"].append(section_id)
+            append_limited_unique(outcome_record, "labels", page["title"], MAX_OUTCOME_LABELS)
+            append_limited_unique(outcome_record, "sources", section_url, MAX_OUTCOME_SOURCES)
+            append_limited_unique(outcome_record, "section_ids", section_id, MAX_OUTCOME_SECTION_IDS)
 
     nav_nodes = [
         {
@@ -288,6 +292,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
     write_jsonl(out_root / "external_links.jsonl", [])
     write_jsonl(out_root / "edges.jsonl", edges)
 
+    url_outcomes = compact_url_outcomes(url_outcomes)
     outcome_counts = Counter(record["outcome"] for record in url_outcomes.values())
     manifest = {
         "site_id": site_id,

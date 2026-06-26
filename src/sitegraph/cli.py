@@ -20,6 +20,7 @@ from .crawl_state import CrawlState
 from .config import load_yaml
 from .fetch import fetch_html
 from .extract import extract_nav_tree_from_homepage
+from .outcomes import compact_url_outcomes
 from .util import now_iso, write_json, normalize_url
 
 
@@ -84,7 +85,7 @@ def crawl_site(args: argparse.Namespace) -> None:
         'outcomes': {},
         'errors': [],
         'quality': {},
-        'url_outcomes': dict(old_manifest.get('url_outcomes', {})) if incremental else {},
+        'url_outcomes': compact_url_outcomes(old_manifest.get('url_outcomes', {})) if incremental else {},
     }
     initial_known_urls = set(manifest['url_outcomes'])
     detail_records_by_url: dict[str, dict] = {
