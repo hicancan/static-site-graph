@@ -98,6 +98,7 @@ def test_job91_adapter_crawls_api_pages_until_terminal_page(tmp_path, monkeypatc
             "domain": "njupt.91job.org.cn",
             "adapter": "job91_api",
             "audit_evidence_ref": "reports/audit_evidence.md",
+            "audit_evidence_json_ref": "reports/audit_evidence.json",
         },
         "crawl_policy": {
             "attachment_policy": "metadata_only",

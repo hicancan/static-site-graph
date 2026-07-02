@@ -250,7 +250,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             "crawlable": True,
             "business_tags": ["employment", "job91", "api"],
             "pagination": {"type": "api", "max_pages_safety": max_pages},
-            "source": "job91_api",
+            "source": "api_category",
             "api": {"endpoint": "/web/wsjysc/wzsy/getLbsj", "lmid": lmid, "row": max_items, "page_param": "page"},
         }
         sections.append(section)
@@ -373,7 +373,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             "container_selector": None,
             "link_count": None,
             "position": index,
-            "source": "job91_api",
+            "source": "api_category",
         }
         for index, column in enumerate(columns)
     ]

@@ -10,6 +10,30 @@ from typing import Any
 from .util import now_iso, write_json
 
 COVERAGE_REPORT_VERSION = "sitegraph-coverage-v1"
+ALLOWED_COVERAGE_STATUSES = {
+    "complete",
+    "complete_with_exclusions",
+    "blocked_by_source",
+    "incomplete",
+}
+ALLOWED_EVIDENCE_SOURCES = {"full_crawl", "incremental_crawl", "backfill"}
+ALLOWED_SECTION_SOURCES = {
+    "declared_section",
+    "homepage_nav",
+    "homepage_module",
+    "inline_section_link",
+    "api_category",
+    "archive_section",
+}
+
+
+def audit_evidence_json_ref(cfg: dict[str, Any]) -> str | None:
+    policy = cfg.get("crawl_policy", {})
+    value = policy.get("audit_evidence_json_ref") or cfg.get("site", {}).get("audit_evidence_json_ref")
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
 
 
 def audit_evidence_ref(cfg: dict[str, Any]) -> str | None:
@@ -40,13 +64,24 @@ def configured_exclusions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError("coverage exclusion entries must be objects")
+        scope = str(item.get("scope") or "").strip()
         reason = str(item.get("reason") or "").strip()
+        evidence_url = str(item.get("evidence_url") or "").strip()
         expiry = str(item.get("expiry") or "").strip()
-        if not reason or not expiry:
-            raise ValueError("coverage exclusion entries require reason and expiry")
+        owner_action = str(item.get("owner_action") or "").strip()
+        if not scope or not reason or not evidence_url or not expiry or not owner_action:
+            raise ValueError(
+                "coverage exclusion entries require scope, reason, evidence_url, expiry and owner_action"
+            )
         if expiry < today:
             raise ValueError(f"coverage exclusion expired: {item!r}")
-        exclusions.append(dict(item))
+        normalized = dict(item)
+        normalized["scope"] = scope
+        normalized["reason"] = reason
+        normalized["evidence_url"] = evidence_url
+        normalized["expiry"] = expiry
+        normalized["owner_action"] = owner_action
+        exclusions.append(normalized)
     return exclusions
 
 
@@ -96,6 +131,35 @@ def _safety_cap_hits(entries: list[dict[str, Any]], exclusions: list[dict[str, A
     ]
 
 
+def _existing_evidence_source(out_root: Path) -> str | None:
+    path = out_root / "coverage_report.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = str(payload.get("evidence_source") or "").strip()
+    return value if value in ALLOWED_EVIDENCE_SOURCES else None
+
+
+def _evidence_source(out_root: Path, incremental: bool) -> str:
+    if not incremental:
+        return "full_crawl"
+    return _existing_evidence_source(out_root) or "incremental_crawl"
+
+
+def _source_blocking_error(error: dict[str, Any]) -> bool:
+    if error.get("source_blocked") is True or error.get("classification") == "blocked_by_source":
+        return True
+    status_code = error.get("status_code")
+    try:
+        status = int(status_code)
+    except (TypeError, ValueError):
+        return False
+    return status in {404, 410, 429, 500, 502, 503, 504}
+
+
 def build_coverage_report(
     *,
     cfg: dict[str, Any],
@@ -131,15 +195,20 @@ def build_coverage_report(
     section_sources = Counter(str(section.get("source") or "unknown") for section in sections)
     section_types = Counter(str(section.get("section_type") or "unknown") for section in sections)
     audit_ref = audit_evidence_ref(cfg)
+    audit_json_ref = audit_evidence_json_ref(cfg)
+    evidence_source = _evidence_source(out_root, incremental)
     terminal_verified = _pagination_terminal_verified(pagination_entries, exclusions)
     coverage_status = "complete"
     incomplete_reasons: list[str] = []
-    if incremental:
-        coverage_status = "incremental"
-        incomplete_reasons.append("incremental crawl reuses prior package frontier")
+    invalid_section_sources = sorted(
+        source for source in section_sources if source not in ALLOWED_SECTION_SOURCES
+    )
     if not audit_ref:
         coverage_status = "incomplete"
         incomplete_reasons.append("missing audit_evidence_ref")
+    if not audit_json_ref:
+        coverage_status = "incomplete"
+        incomplete_reasons.append("missing audit_evidence_json_ref")
     if safety_cap_hits:
         coverage_status = "incomplete"
         incomplete_reasons.append("pagination safety cap hit before terminal page")
@@ -152,15 +221,27 @@ def build_coverage_report(
     if unknown_urls:
         coverage_status = "incomplete"
         incomplete_reasons.append("unknown urls require classification or exclusion")
+    if invalid_section_sources:
+        coverage_status = "incomplete"
+        incomplete_reasons.append(f"unknown section sources: {', '.join(invalid_section_sources)}")
+    if coverage_status == "complete" and exclusions:
+        coverage_status = "complete_with_exclusions"
+    if incomplete_reasons == ["crawl errors present"] and all(
+        _source_blocking_error(error) for error in blocking_errors
+    ):
+        coverage_status = "blocked_by_source"
+        incomplete_reasons = ["source blocked during crawl; model contract did not fail"]
 
     return {
         "version": COVERAGE_REPORT_VERSION,
         "site_id": site_id,
         "generated_at": now_iso(),
         "crawl_mode": "incremental" if incremental else "full",
+        "evidence_source": evidence_source,
         "coverage_status": coverage_status,
         "incomplete_reasons": incomplete_reasons,
         "audit_evidence_ref": audit_ref,
+        "audit_evidence_json_ref": audit_json_ref,
         "sections": {
             "total": len(sections),
             "by_source": dict(sorted(section_sources.items())),
@@ -197,7 +278,9 @@ def build_coverage_report(
 def apply_coverage_to_manifest(manifest: dict[str, Any], report: dict[str, Any]) -> None:
     manifest["errors"] = list(report.get("errors") or [])
     manifest["coverage_status"] = report["coverage_status"]
+    manifest["evidence_source"] = report["evidence_source"]
     manifest["audit_evidence_ref"] = report["audit_evidence_ref"]
+    manifest["audit_evidence_json_ref"] = report["audit_evidence_json_ref"]
     manifest["pagination_terminal_verified"] = report["pagination"]["terminal_verified"]
     manifest["unknown_url_count"] = report["urls"]["unknown_url_count"]
     manifest["excluded_url_count"] = report["urls"]["excluded_url_count"]
@@ -205,8 +288,10 @@ def apply_coverage_to_manifest(manifest: dict[str, Any], report: dict[str, Any])
     quality.update(
         {
             "coverage_status": report["coverage_status"],
+            "evidence_source": report["evidence_source"],
             "errors": len(manifest["errors"]),
             "audit_evidence_ref": report["audit_evidence_ref"],
+            "audit_evidence_json_ref": report["audit_evidence_json_ref"],
             "pagination_terminal_verified": report["pagination"]["terminal_verified"],
             "unknown_url_count": report["urls"]["unknown_url_count"],
             "excluded_url_count": report["urls"]["excluded_url_count"],

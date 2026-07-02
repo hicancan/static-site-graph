@@ -67,6 +67,8 @@ def discover_sections_from_homepage(
         section.setdefault('site_id', site_id)
         section['url'] = normalize_url(section['url'], base_url)
         section.setdefault('pagination', {'type': 'next_link', 'max_pages_safety': 500})
+        if section.get('source') in {None, ''}:
+            section['source'] = 'declared_section'
         existing = sections_by_url.get(section['url'])
         if not existing or existing.get('source') == 'homepage_nav':
             sections_by_url[section['url']] = section
@@ -98,7 +100,7 @@ def discover_sections_from_homepage(
                         'crawlable': True,
                         'business_tags': ['homepage_link'],
                         'pagination': {'type': 'next_link', 'max_pages_safety': 500},
-                        'source': 'homepage_link',
+                        'source': 'homepage_nav',
                     })
 
     return list(sections_by_url.values())

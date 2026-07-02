@@ -30,11 +30,26 @@
       "type": "string",
       "enum": [
         "complete",
-        "incomplete",
-        "incremental"
+        "complete_with_exclusions",
+        "blocked_by_source",
+        "incomplete"
+      ]
+    },
+    "evidence_source": {
+      "type": "string",
+      "enum": [
+        "full_crawl",
+        "incremental_crawl",
+        "backfill"
       ]
     },
     "audit_evidence_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "audit_evidence_json_ref": {
       "type": [
         "string",
         "null"

@@ -61,7 +61,7 @@ class CrawlPageRunner:
             'crawlable': True,
             'business_tags': ['inline_section'],
             'pagination': {'type': 'next_link', 'max_pages_safety': 500},
-            'source': 'inline_link',
+            'source': 'inline_section_link',
             'source_url': source_url,
         })
 
@@ -313,7 +313,7 @@ class CrawlPageRunner:
             'crawlable': True,
             'business_tags': ['direct_detail'],
             'pagination': {'type': 'none'},
-            'source': 'manifest_backfill',
+            'source': 'archive_section',
         }
         direct_section_recorded = False
         while True:

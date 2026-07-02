@@ -11,7 +11,7 @@ def test_discover_sections_preserves_config_and_promotes_homepage_modules() -> N
                 'section_id': 'configured_notice',
                 'name': 'Configured notices',
                 'url': 'https://demo.example.edu/news/list.htm',
-                'source': 'config',
+                'source': 'declared_section',
                 'crawlable': True,
             }
         ],
@@ -66,8 +66,8 @@ def test_discover_sections_preserves_config_and_promotes_homepage_modules() -> N
     by_url = {section['url']: section for section in sections}
 
     assert by_url['https://demo.example.edu/news/list.htm']['section_id'] == 'configured_notice'
-    assert by_url['https://demo.example.edu/news/list.htm']['source'] == 'config'
+    assert by_url['https://demo.example.edu/news/list.htm']['source'] == 'declared_section'
     assert by_url['https://demo.example.edu/teaching/list.htm']['source'] == 'homepage_module'
     assert by_url['https://demo.example.edu/teaching/list.htm']['container_selector'] == '.teaching'
-    assert by_url['https://demo.example.edu/extra/list.htm']['source'] == 'homepage_link'
+    assert by_url['https://demo.example.edu/extra/list.htm']['source'] == 'homepage_nav'
     assert 'https://external.example.edu/list.htm' not in by_url
