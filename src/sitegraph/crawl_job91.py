@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 
 import requests
 
+from .coverage import apply_coverage_to_manifest, build_coverage_report, record_pagination_evidence, write_coverage_report
 from .crawl_output import write_site_metadata
 from .fetch import DEFAULT_HEADERS
 from .outcomes import (
@@ -126,12 +127,70 @@ def _fair_record(base_url: str, site_id: str, section: dict[str, Any], item: dic
     }
 
 
+def _job91_item_key(item: dict[str, Any]) -> str:
+    for key in ("xwid", "zphid", "zwid", "companyId", "id"):
+        value = _clean(item.get(key))
+        if value:
+            return f"{key}:{value}"
+    return stable_id(json.dumps(item, ensure_ascii=False, sort_keys=True))
+
+
+def _fetch_job91_list_pages(
+    client: Job91ApiClient,
+    *,
+    lmid: str,
+    row: int,
+    max_pages: int,
+) -> tuple[list[tuple[int, list[dict[str, Any]]]], dict[str, Any]]:
+    pages: list[tuple[int, list[dict[str, Any]]]] = []
+    seen_page_keys: set[tuple[str, ...]] = set()
+    termination_reason = "empty_first_page"
+    terminal_verified = False
+    next_page_after_terminal: int | None = None
+    for page_index in range(1, max_pages + 1):
+        params = {"lmid": lmid, "row": row}
+        if page_index > 1:
+            params["page"] = page_index
+        payload = client.get_json("/web/wsjysc/wzsy/getLbsj", params)
+        items = payload.get("result")
+        if not isinstance(items, list):
+            raise RuntimeError(f"job91 list result for {lmid} page {page_index} must be a list")
+        item_keys = tuple(_job91_item_key(item) for item in items)
+        if page_index > 1 and item_keys and item_keys in seen_page_keys:
+            termination_reason = "api_duplicate_page"
+            terminal_verified = True
+            break
+        if not items:
+            termination_reason = "empty_page"
+            terminal_verified = True
+            break
+        seen_page_keys.add(item_keys)
+        pages.append((page_index, items))
+        if len(items) < row:
+            termination_reason = "short_page"
+            terminal_verified = True
+            break
+    else:
+        if pages:
+            termination_reason = "safety_cap"
+            next_page_after_terminal = max_pages + 1
+        else:
+            termination_reason = "empty_first_page"
+            terminal_verified = True
+    return pages, {
+        "termination_reason": termination_reason,
+        "terminal_verified": terminal_verified,
+        "next_page": next_page_after_terminal,
+    }
+
+
 def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = False) -> dict[str, Any]:
     site = cfg["site"]
     site_id = site["id"]
     base_url = str(site["base_url"]).rstrip("/")
     timeout = int(cfg.get("crawl_policy", {}).get("timeout_seconds", 20))
     max_items = int(cfg.get("crawl_policy", {}).get("job91_items_per_section", 80))
+    max_pages = int(cfg.get("crawl_policy", {}).get("job91_max_pages_per_section", cfg.get("crawl_policy", {}).get("max_pages_safety", 20)))
     client = Job91ApiClient(base_url=base_url, timeout=timeout)
 
     if dry_run:
@@ -155,6 +214,7 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
     detail_pages_by_url: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     url_outcomes: dict[str, dict[str, Any]] = {}
+    coverage_manifest: dict[str, Any] = {"coverage": {"pagination": []}, "errors": []}
     root_url = base_url + "/"
     home_url = base_url + JOB91_HOME_PATH
     url_outcomes[root_url] = {
@@ -189,28 +249,29 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             "nav_path": column["nav_path"],
             "crawlable": True,
             "business_tags": ["employment", "job91", "api"],
-            "pagination": {"type": "api", "max_pages_safety": 1},
+            "pagination": {"type": "api", "max_pages_safety": max_pages},
             "source": "job91_api",
-            "api": {"endpoint": "/web/wsjysc/wzsy/getLbsj", "lmid": lmid, "row": max_items},
+            "api": {"endpoint": "/web/wsjysc/wzsy/getLbsj", "lmid": lmid, "row": max_items, "page_param": "page"},
         }
         sections.append(section)
-        payload = client.get_json("/web/wsjysc/wzsy/getLbsj", {"lmid": lmid, "row": max_items})
-        items = payload.get("result")
-        if not isinstance(items, list):
-            raise RuntimeError(f"job91 list result for {lmid} must be a list")
-        page_id = stable_id(site_id, section_url)
-        list_pages.append({
-            "page_id": page_id,
-            "site_id": site_id,
+        pages, pagination_result = _fetch_job91_list_pages(client, lmid=lmid, row=max_items, max_pages=max_pages)
+        if pagination_result["termination_reason"] == "safety_cap":
+            coverage_manifest["errors"].append({
+                "section_id": section_id,
+                "phase": "pagination",
+                "error": f"job91 API reached max_pages_safety={max_pages} before terminal page",
+                "next_page": pagination_result["next_page"],
+            })
+        record_pagination_evidence(coverage_manifest, {
             "section_id": section_id,
-            "url": section_url,
-            "page_type": "section_list_page",
-            "status": "ok",
-            "page_index": 1,
-            "item_count": len(items),
-            "target_type_counts": {"detail_article_page": len(items)},
-            "pagination": {"raw_text": None, "page_size": max_items, "total_records": None, "current_page": 1, "total_pages": 1},
-            "fetched_at": now_iso(),
+            "section_name": column["name"],
+            "section_url": section_url,
+            "last_url": f"{section_url}?page={pages[-1][0]}" if pages else section_url,
+            "next_url": f"{section_url}?page={pagination_result['next_page']}" if pagination_result.get("next_page") else None,
+            "pages_crawled": len(pages),
+            "max_pages_safety": max_pages,
+            "termination_reason": pagination_result["termination_reason"],
+            "terminal_verified": pagination_result["terminal_verified"],
         })
         url_outcomes[section_url] = {
             "url": section_url,
@@ -221,36 +282,71 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             "section_ids": [section_id],
             "status_code": 200,
         }
-        for position, item in enumerate(items):
-            page = (
-                _fair_record(base_url, site_id, section, item, position)
-                if "zphid" in item or "zphmc" in item
-                else _news_record(base_url, site_id, section, item, position)
-            )
-            detail_pages_by_url.setdefault(page["url"], page)
-            edges.append({
-                "edge_id": stable_id(section_url, page["url"], page["title"], position),
-                "from_url": section_url,
-                "to_url": page["url"],
-                "anchor_text": page["title"],
-                "edge_type": "api_list_item",
-                "target_type": "detail_article_page",
-                "same_domain": True,
+        for page_index, items in pages:
+            list_url = section_url if page_index == 1 else f"{section_url}?page={page_index}"
+            page_id = stable_id(site_id, list_url)
+            list_pages.append({
+                "page_id": page_id,
+                "site_id": site_id,
+                "section_id": section_id,
+                "url": list_url,
+                "page_type": "section_list_page",
+                "status": "ok",
+                "page_index": page_index,
+                "item_count": len(items),
+                "target_type_counts": {"detail_article_page": len(items)},
+                "pagination": {
+                    "raw_text": None,
+                    "page_size": max_items,
+                    "total_records": None,
+                    "current_page": page_index,
+                    "total_pages": None,
+                    "terminal_verified": pagination_result["terminal_verified"],
+                    "termination_reason": pagination_result["termination_reason"],
+                },
+                "fetched_at": now_iso(),
             })
-            outcome_record = url_outcomes.setdefault(page["url"], {
-                "url": page["url"],
-                "target_type": "detail_article_page",
-                "outcome": "crawled_detail_ok",
-                "labels": [],
-                "sources": [],
-                "section_ids": [],
-                "status_code": 200,
-            })
-            outcome_record["target_type"] = "detail_article_page"
-            outcome_record["outcome"] = "crawled_detail_ok"
-            append_limited_unique(outcome_record, "labels", page["title"], MAX_OUTCOME_LABELS)
-            append_limited_unique(outcome_record, "sources", section_url, MAX_OUTCOME_SOURCES)
-            append_limited_unique(outcome_record, "section_ids", section_id, MAX_OUTCOME_SECTION_IDS)
+            if page_index > 1:
+                url_outcomes[list_url] = {
+                    "url": list_url,
+                    "target_type": "section_list_page",
+                    "outcome": "crawled_list_ok",
+                    "labels": [column["name"]],
+                    "sources": [section_url],
+                    "section_ids": [section_id],
+                    "status_code": 200,
+                }
+            for position, item in enumerate(items):
+                absolute_position = (page_index - 1) * max_items + position
+                page = (
+                    _fair_record(base_url, site_id, section, item, absolute_position)
+                    if "zphid" in item or "zphmc" in item
+                    else _news_record(base_url, site_id, section, item, absolute_position)
+                )
+                detail_pages_by_url.setdefault(page["url"], page)
+                edges.append({
+                    "edge_id": stable_id(list_url, page["url"], page["title"], absolute_position),
+                    "from_url": list_url,
+                    "to_url": page["url"],
+                    "anchor_text": page["title"],
+                    "edge_type": "api_list_item",
+                    "target_type": "detail_article_page",
+                    "same_domain": True,
+                })
+                outcome_record = url_outcomes.setdefault(page["url"], {
+                    "url": page["url"],
+                    "target_type": "detail_article_page",
+                    "outcome": "crawled_detail_ok",
+                    "labels": [],
+                    "sources": [],
+                    "section_ids": [],
+                    "status_code": 200,
+                })
+                outcome_record["target_type"] = "detail_article_page"
+                outcome_record["outcome"] = "crawled_detail_ok"
+                append_limited_unique(outcome_record, "labels", page["title"], MAX_OUTCOME_LABELS)
+                append_limited_unique(outcome_record, "sources", list_url, MAX_OUTCOME_SOURCES)
+                append_limited_unique(outcome_record, "section_ids", section_id, MAX_OUTCOME_SECTION_IDS)
 
     nav_nodes = [
         {
@@ -310,14 +406,29 @@ def crawl_job91_site(cfg: dict[str, Any], *, out_root: Path, dry_run: bool = Fal
             "url_outcomes": len(url_outcomes),
         },
         "outcomes": dict(sorted(outcome_counts.items())),
-        "errors": [],
+        "errors": coverage_manifest["errors"],
         "quality": {
             "all_discovered_urls_have_outcomes": True,
-            "errors": 0,
+            "errors": len(coverage_manifest["errors"]),
             "attachment_policy": cfg.get("crawl_policy", {}).get("attachment_policy", "metadata_only"),
             "external_link_policy": cfg.get("crawl_policy", {}).get("external_link_policy", "record_only"),
         },
         "url_outcomes": url_outcomes,
+        "coverage": coverage_manifest["coverage"],
     }
+    coverage_report = build_coverage_report(
+        cfg=cfg,
+        site_id=site_id,
+        out_root=out_root,
+        manifest=manifest,
+        sections=sections,
+        list_pages=list_pages,
+        detail_pages=detail_pages,
+        attachments=[],
+        external_links=[],
+        incremental=False,
+    )
+    apply_coverage_to_manifest(manifest, coverage_report)
+    write_coverage_report(out_root, coverage_report, incremental=False)
     write_json(out_root / "manifest.json", manifest)
     return manifest["totals"]

@@ -25,6 +25,34 @@
     },
     "quality": {
       "type": "object"
+    },
+    "coverage_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "incomplete",
+        "incremental"
+      ]
+    },
+    "audit_evidence_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pagination_terminal_verified": {
+      "type": "boolean"
+    },
+    "unknown_url_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "excluded_url_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "coverage": {
+      "type": "object"
     }
   }
 }

@@ -11,6 +11,7 @@ from .extract import (
     extract_list_items,
     extract_pagination_metadata,
 )
+from .coverage import record_pagination_evidence
 from .util import normalize_url, now_iso, stable_id
 
 
@@ -153,10 +154,16 @@ class CrawlPageRunner:
         next_url = normalize_url(section['url'], self.base_url)
         visited = set()
         page_index = 1
+        pages_crawled = 0
         known_pages_in_a_row = 0
         frontier_remaining = self.refresh_frontier if self.state.incremental else 0
         max_pages = int(section.get('pagination', {}).get('max_pages_safety', self.cfg.get('crawl_policy', {}).get('max_pages_safety', 20)))
+        last_url: str | None = None
+        termination_reason = 'empty_start_url'
+        terminal_verified = False
         while next_url and next_url not in visited and page_index <= max_pages:
+            current_url = next_url
+            last_url = current_url
             visited.add(next_url)
             res = self.state.fetch(next_url)
             if res.error or (res.status_code and res.status_code >= 400):
@@ -169,6 +176,7 @@ class CrawlPageRunner:
                 }
                 self.state.manifest['errors'].append(err)
                 self.state.add_outcome(next_url, 'section_list_page', 'error', section.get('url'), section.get('name'), section_id, res.status_code, err['error'])
+                termination_reason = 'fetch_error'
                 break
             item_container_selector = section.get('item_container_selector') or self.cfg.get('selectors', {}).get('list', {}).get('item_container')
             items = extract_list_items(res.text, next_url, self.base_url, item_container_selector)
@@ -188,6 +196,7 @@ class CrawlPageRunner:
                 'pagination': extract_pagination_metadata(res.text),
                 'fetched_at': now_iso(),
             }
+            pages_crawled += 1
             self.state.add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
             if not items:
                 self.record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
@@ -200,11 +209,47 @@ class CrawlPageRunner:
                     frontier_remaining,
                 )
             next_url = discover_next_url(res.text, next_url, self.base_url)
+            if not next_url:
+                termination_reason = 'no_next_page'
+                terminal_verified = True
             if self.state.incremental:
                 known_pages_in_a_row = 0 if page_has_new else known_pages_in_a_row + 1
                 if known_pages_in_a_row >= self.known_page_stop:
+                    termination_reason = 'incremental_known_page_stop'
+                    terminal_verified = True
                     break
             page_index += 1
+        else:
+            if next_url and next_url in visited:
+                termination_reason = 'pagination_cycle'
+            elif next_url and page_index > max_pages:
+                termination_reason = 'safety_cap'
+            elif not next_url:
+                termination_reason = 'no_next_page'
+                terminal_verified = True
+
+        if termination_reason == 'safety_cap' and not self.state.incremental:
+            err = {
+                'url': last_url,
+                'next_url': next_url,
+                'section_id': section_id,
+                'phase': 'pagination',
+                'error': f'pagination reached max_pages_safety={max_pages} before terminal page',
+            }
+            self.state.manifest['errors'].append(err)
+
+        if not self.state.incremental:
+            record_pagination_evidence(self.state.manifest, {
+                'section_id': section_id,
+                'section_name': section.get('name'),
+                'section_url': section.get('url'),
+                'last_url': last_url,
+                'next_url': next_url,
+                'pages_crawled': pages_crawled,
+                'max_pages_safety': max_pages,
+                'termination_reason': termination_reason,
+                'terminal_verified': terminal_verified,
+            })
 
     def _record_list_item(
         self,

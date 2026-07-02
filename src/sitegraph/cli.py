@@ -86,6 +86,7 @@ def crawl_site(args: argparse.Namespace) -> None:
         'errors': [],
         'quality': {},
         'url_outcomes': compact_url_outcomes(old_manifest.get('url_outcomes', {})) if incremental else {},
+        'coverage': old_manifest.get('coverage', {}) if incremental else {},
     }
     initial_known_urls = set(manifest['url_outcomes'])
     detail_records_by_url: dict[str, dict] = {

@@ -24,3 +24,13 @@ def test_webplus_template_helpers_are_explicit() -> None:
         == "editor_helper_page"
     )
     assert classify_url("https://demo.example.edu/4808/{站点URL}", "https://demo.example.edu/") == "template_placeholder_link"
+
+
+def test_webplus_malformed_office_upload_is_attachment() -> None:
+    assert (
+        classify_url(
+            "https://demo.example.edu/_upload/article/1/9f/f8/file.doc.x",
+            "https://demo.example.edu/",
+        )
+        == "attachment_file"
+    )

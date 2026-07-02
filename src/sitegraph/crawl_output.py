@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from .coverage import apply_coverage_to_manifest, build_coverage_report, write_coverage_report
 from .outcomes import (
     MAX_OUTCOME_LABELS,
     MAX_OUTCOME_SECTION_IDS,
@@ -183,5 +184,19 @@ def finalize_crawl_output(package: CrawlOutputPackage) -> dict:
         'attachment_policy': package.cfg.get('crawl_policy', {}).get('attachment_policy', 'metadata_only'),
         'external_link_policy': package.cfg.get('crawl_policy', {}).get('external_link_policy', 'record_only'),
     }
+    coverage_report = build_coverage_report(
+        cfg=package.cfg,
+        site_id=package.manifest['site_id'],
+        out_root=package.out_root,
+        manifest=package.manifest,
+        sections=sections_for_output,
+        list_pages=list(package.list_pages_by_url.values()),
+        detail_pages=list(package.detail_records_by_url.values()),
+        attachments=list(package.attachments_by_id.values()),
+        external_links=list(package.external_links_by_id.values()),
+        incremental=package.incremental,
+    )
+    apply_coverage_to_manifest(package.manifest, coverage_report)
+    write_coverage_report(package.out_root, coverage_report, package.incremental)
     write_json_preserving_volatile(package.out_root / 'manifest.json', package.manifest, package.incremental)
     return package.manifest['totals']
