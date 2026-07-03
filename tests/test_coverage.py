@@ -127,3 +127,40 @@ def test_coverage_report_marks_complete_with_exclusions(tmp_path, monkeypatch):
     assert coverage["evidence_source"] == "full_crawl"
     assert coverage["audit_evidence_json_ref"] == "reports/audit_evidence.json"
     assert coverage["urls"]["excluded_url_count"] == 1
+
+
+def test_coverage_report_marks_network_unreachable_as_source_blocked(tmp_path, monkeypatch):
+    config = tmp_path / "site.yaml"
+    out = tmp_path / "index"
+    _write_config(config)
+
+    def fake_fetch(url: str, timeout: int = 20, verify: bool = True) -> FetchResult:
+        return FetchResult(
+            url=url,
+            final_url=url,
+            status_code=None,
+            text="",
+            error=(
+                "HTTPSConnectionPool(host='cap.example.edu', port=443): Max retries exceeded "
+                "with url: / (Caused by NewConnectionError(\"Failed to establish a new "
+                "connection: [Errno 101] Network is unreachable\"))"
+            ),
+        )
+
+    monkeypatch.setattr(cli, "fetch_html", fake_fetch)
+    cli.crawl_site(
+        argparse.Namespace(
+            config=str(config),
+            out=str(out),
+            dry_run=False,
+            incremental=False,
+            incremental_known_page_stop=1,
+            incremental_refresh_frontier=0,
+        )
+    )
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    coverage = json.loads((out / "coverage_report.json").read_text(encoding="utf-8"))
+    assert manifest["coverage_status"] == "blocked_by_source"
+    assert coverage["coverage_status"] == "blocked_by_source"
+    assert coverage["incomplete_reasons"] == ["source blocked during crawl; model contract did not fail"]

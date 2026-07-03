@@ -152,6 +152,23 @@ def _evidence_source(out_root: Path, incremental: bool) -> str:
 def _source_blocking_error(error: dict[str, Any]) -> bool:
     if error.get("source_blocked") is True or error.get("classification") == "blocked_by_source":
         return True
+    message = str(error.get("error") or "").lower()
+    if any(
+        marker in message
+        for marker in (
+            "network is unreachable",
+            "failed to establish a new connection",
+            "max retries exceeded",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "connection refused",
+            "connection reset",
+            "read timed out",
+            "connect timeout",
+            "connection timed out",
+        )
+    ):
+        return True
     status_code = error.get("status_code")
     try:
         status = int(status_code)
@@ -226,8 +243,11 @@ def build_coverage_report(
         incomplete_reasons.append(f"unknown section sources: {', '.join(invalid_section_sources)}")
     if coverage_status == "complete" and exclusions:
         coverage_status = "complete_with_exclusions"
-    if incomplete_reasons == ["crawl errors present"] and all(
-        _source_blocking_error(error) for error in blocking_errors
+    non_source_blocked_failure = bool(safety_cap_hits or unknown_urls or invalid_section_sources)
+    if (
+        blocking_errors
+        and not non_source_blocked_failure
+        and all(_source_blocking_error(error) for error in blocking_errors)
     ):
         coverage_status = "blocked_by_source"
         incomplete_reasons = ["source blocked during crawl; model contract did not fail"]
