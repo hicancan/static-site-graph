@@ -30,24 +30,6 @@ SKIP_LINK_TEXT = {
     '末页',
 }
 
-MODULE_LABELS = [
-    '新闻资讯',
-    '新闻动态',
-    '通知公告',
-    '学工要闻',
-    '政策法规',
-    '下载专区',
-    '双创项目',
-    '竞赛成果',
-    '教务快讯',
-    '教改动态',
-    '八面来风',
-    '综合信息服务',
-    '本科教学工程',
-    '校内链接',
-    '校外链接',
-]
-
 MODULE_CONTAINER_SELECTORS = [
     'div[class*="post-"]',
     '.links-wrap',
@@ -70,7 +52,11 @@ def _link_label(a: Tag) -> str:
     return clean_text(a.get('title') or a.get_text(' ', strip=True))
 
 
-def _iter_scoped_anchors(soup: BeautifulSoup, container_selector: str | None = None, fallback_all: bool = True) -> list[Tag]:
+def _iter_scoped_anchors(
+    soup: BeautifulSoup,
+    container_selector: str | None = None,
+    scan_document_when_unscoped: bool = True,
+) -> list[Tag]:
     if container_selector:
         containers = soup.select(container_selector)
         if containers:
@@ -78,7 +64,7 @@ def _iter_scoped_anchors(soup: BeautifulSoup, container_selector: str | None = N
             for container in containers:
                 anchors.extend(container.find_all('a'))
             return anchors
-        if not fallback_all:
+        if not scan_document_when_unscoped:
             return []
     for selector in LIST_CONTAINER_SELECTORS:
         containers = soup.select(selector)
@@ -87,7 +73,7 @@ def _iter_scoped_anchors(soup: BeautifulSoup, container_selector: str | None = N
             for container in containers:
                 anchors.extend(container.find_all('a'))
             return anchors
-    return soup.find_all('a') if fallback_all else []
+    return soup.find_all('a') if scan_document_when_unscoped else []
 
 
 def _is_skippable_link(url: str, label: str, base_url: str) -> bool:
@@ -202,7 +188,7 @@ def extract_homepage_modules(
     container_selectors: list[str] | None = None,
 ) -> list[dict]:
     soup = soup_from_html(html)
-    labels = module_labels or MODULE_LABELS
+    labels = module_labels or []
     selectors = container_selectors or MODULE_CONTAINER_SELECTORS
     containers = []
     seen_container_ids = set()
@@ -217,6 +203,13 @@ def extract_homepage_modules(
     for idx, container in enumerate(containers):
         text = clean_text(container.get_text(' ', strip=True))
         name = next((label for label in labels if label in text), '')
+        if not name:
+            heading = container.select_one(
+                "h1, h2, h3, h4, [class*='title'], [class*='head']"
+            )
+            name = clean_text(
+                heading.get_text(" ", strip=True) if heading else ""
+            )
         if not name:
             continue
         links, _ = extract_all_links(str(container), page_url, base_url)
@@ -254,7 +247,13 @@ def extract_list_items(html: str, page_url: str, base_url: str, container_select
     soup = soup_from_html(html)
     items: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    for idx, a in enumerate(_iter_scoped_anchors(soup, container_selector, fallback_all=False)):
+    for idx, a in enumerate(
+        _iter_scoped_anchors(
+            soup,
+            container_selector,
+            scan_document_when_unscoped=False,
+        )
+    ):
         url = _normalize_href(a.get('href'), page_url)
         label = _link_label(a)
         target_type = classify_url(url, base_url)
@@ -322,7 +321,7 @@ def _extract_detail_content_node(soup: BeautifulSoup) -> tuple[Tag | BeautifulSo
         node = soup.select_one(selector)
         if node:
             return node, selector
-    return soup, 'document_fallback'
+    return soup, 'no_content_container'
 
 
 def extract_detail_page(html: str, page_url: str, base_url: str, site_id: str, section_id: str | None = None) -> tuple[dict, list[dict], list[dict]]:
@@ -336,7 +335,7 @@ def extract_detail_page(html: str, page_url: str, base_url: str, site_id: str, s
                 break
     content_node, strategy = _extract_detail_content_node(soup)
     content = clean_text(content_node.get_text(' ', strip=True))
-    if strategy == 'document_fallback':
+    if strategy == 'no_content_container':
         content = ''
     text_all = clean_text(soup.get_text(' ', strip=True))
     publisher = None
@@ -395,7 +394,7 @@ def extract_detail_page(html: str, page_url: str, base_url: str, site_id: str, s
         'view_count': view_count,
         'content_text': content,
         'content_hash': stable_id(content) if content else None,
-        'status': 'ok' if title else 'low_evidence',
+        'status': 'ok' if title else 'missing_title',
         'content_status': content_status,
         'extraction_strategy': strategy,
         'headings': headings,

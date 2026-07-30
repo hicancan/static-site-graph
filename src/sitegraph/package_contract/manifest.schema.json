@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:static-site-graph:site-package:manifest",
+  "title": "SitePackage manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "site_id",
+    "package_id",
+    "started_at",
+    "finished_at",
+    "artifacts",
+    "totals",
+    "errors"
+  ],
+  "properties": {
+    "format": {
+      "const": "static-site-package-v3"
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "started_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "finished_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site.json",
+        "nav_tree.json",
+        "homepage_modules.json",
+        "sections.json",
+        "list_pages.jsonl",
+        "detail_pages.jsonl",
+        "attachments.jsonl",
+        "external_links.jsonl",
+        "edges.jsonl"
+      ],
+      "properties": {
+        "site.json": {"$ref": "#/$defs/artifact"},
+        "nav_tree.json": {"$ref": "#/$defs/artifact"},
+        "homepage_modules.json": {"$ref": "#/$defs/artifact"},
+        "sections.json": {"$ref": "#/$defs/artifact"},
+        "list_pages.jsonl": {"$ref": "#/$defs/artifact"},
+        "detail_pages.jsonl": {"$ref": "#/$defs/artifact"},
+        "attachments.jsonl": {"$ref": "#/$defs/artifact"},
+        "external_links.jsonl": {"$ref": "#/$defs/artifact"},
+        "edges.jsonl": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sections",
+        "nav_nodes",
+        "homepage_modules",
+        "list_pages",
+        "detail_pages",
+        "empty_content",
+        "unrecognized_page_type",
+        "attachments",
+        "external_links",
+        "edges"
+      ],
+      "properties": {
+        "sections": {"type": "integer", "minimum": 0},
+        "nav_nodes": {"type": "integer", "minimum": 0},
+        "homepage_modules": {"type": "integer", "minimum": 0},
+        "list_pages": {"type": "integer", "minimum": 0},
+        "detail_pages": {"type": "integer", "minimum": 0},
+        "empty_content": {"type": "integer", "minimum": 0},
+        "unrecognized_page_type": {"type": "integer", "minimum": 0},
+        "attachments": {"type": "integer", "minimum": 0},
+        "external_links": {"type": "integer", "minimum": 0},
+        "edges": {"type": "integer", "minimum": 0}
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

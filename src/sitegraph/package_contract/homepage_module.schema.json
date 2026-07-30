@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:static-site-graph:site-package:homepage-module",
+  "type": "object",
+  "required": [
+    "module_id",
+    "site_id",
+    "name",
+    "url",
+    "position"
+  ],
+  "properties": {
+    "module_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "list_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "container_selector": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "link_count": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "position": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

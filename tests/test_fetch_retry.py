@@ -2,20 +2,26 @@ from __future__ import annotations
 
 from sitegraph.crawl_state import CrawlState
 from sitegraph.fetch import FetchResult
+from sitegraph.model import SiteDefinition, SitePackage
 
 
 def make_state(fetch_html_fn):
+    definition = SiteDefinition.from_config(
+        {
+            "site": {
+                "id": "demo",
+                "name": "Demo",
+                "base_url": "https://demo.example.edu/",
+                "domain": "demo.example.edu",
+            }
+        }
+    )
     return CrawlState(
         cfg={},
-        base_url='https://demo.example.edu/',
+        package=SitePackage(definition=definition, started_at="now"),
         timeout=1,
         incremental=False,
-        manifest={'url_outcomes': {}},
         initial_known_urls=set(),
-        detail_records_by_url={},
-        attachments_by_id={},
-        external_links_by_id={},
-        edges_by_id={},
         fetch_html_fn=fetch_html_fn,
     )
 

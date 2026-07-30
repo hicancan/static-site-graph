@@ -1,8 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "static-site-graph"
 version = "0.1.0"
-description = "Structured site graph and crawl audit framework for static/semi-static websites"
-license = { file = "LICENSE" }
+description = "Generic SiteDefinition to SitePackage crawler for static and semi-static websites"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
   "beautifulsoup4>=4.12",
@@ -21,3 +26,6 @@ pythonpath = ["src"]
 
 [project.scripts]
 sitegraph = "sitegraph.cli:main"
+
+[tool.setuptools.package-data]
+"sitegraph.package_contract" = ["*.json"]

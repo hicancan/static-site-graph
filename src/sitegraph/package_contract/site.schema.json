@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:static-site-graph:site-package:site",
+  "title": "SiteDefinition identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site_id",
+    "name",
+    "base_url",
+    "domain"
+  ],
+  "properties": {
+    "site_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

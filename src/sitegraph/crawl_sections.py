@@ -67,6 +67,8 @@ def discover_sections_from_homepage(
         section.setdefault('site_id', site_id)
         section['url'] = normalize_url(section['url'], base_url)
         section.setdefault('pagination', {'type': 'next_link', 'max_pages_safety': 500})
+        section.setdefault('section_type', 'declared_section')
+        section.setdefault('nav_path', [str(section.get('name') or section['url'])])
         if section.get('source') in {None, ''}:
             section['source'] = 'declared_section'
         existing = sections_by_url.get(section['url'])

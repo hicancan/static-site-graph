@@ -1,0 +1,23 @@
+site:
+  id: demo
+  name: Example static site
+  base_url: https://demo.example.edu/
+  domain: demo.example.edu
+
+crawl_policy:
+  timeout_seconds: 20
+  max_pages_safety: 3
+  auto_discover_sections_from_homepage: false
+
+sections:
+  - section_id: demo_notices
+    site_id: demo
+    name: Notices
+    url: https://demo.example.edu/notices/list.htm
+    section_type: list
+    nav_path: [Notices]
+    crawlable: true
+    business_tags: [notice]
+    pagination:
+      type: next_link
+      max_pages_safety: 3

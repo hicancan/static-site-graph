@@ -43,7 +43,6 @@ site:
   name: Demo
   base_url: https://demo.example.edu/
   domain: demo.example.edu
-  adapter: demo
 crawl_policy:
   timeout_seconds: 1
   max_pages_safety: 10
@@ -82,7 +81,13 @@ sections:
     )
 
 
-def run_crawl(config: Path, out: Path, *, incremental: bool) -> None:
+def run_crawl(
+    config: Path,
+    out: Path,
+    *,
+    incremental: bool,
+    refresh_frontier: int = 0,
+) -> None:
     cli.crawl_site(
         argparse.Namespace(
             config=str(config),
@@ -90,7 +95,7 @@ def run_crawl(config: Path, out: Path, *, incremental: bool) -> None:
             dry_run=False,
             incremental=incremental,
             incremental_known_page_stop=1,
-            incremental_refresh_frontier=0,
+            incremental_refresh_frontier=refresh_frontier,
         )
     )
 
@@ -108,7 +113,9 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
         ),
         'https://demo.example.edu/1/list2.htm': list_html(
             [('Old notice B', '/2026/0501/c1a1/page.htm', '2026-05-01')],
+            '/1/list3.htm',
         ),
+        'https://demo.example.edu/1/list3.htm': list_html([], '/1/list4.htm'),
         'https://demo.example.edu/2026/0502/c1a2/page.htm': detail_html('Old notice A'),
         'https://demo.example.edu/2026/0501/c1a1/page.htm': detail_html('Old notice B', '2026-05-01'),
         'https://demo.example.edu/landing/list.htm': '''
@@ -131,6 +138,8 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
     run_crawl(config, out, incremental=False)
     assert counts['https://demo.example.edu/2026/0502/c1a2/page.htm'] == 1
     assert counts['https://demo.example.edu/2026/0501/c1a1/page.htm'] == 1
+    assert counts['https://demo.example.edu/1/list3.htm'] == 1
+    assert 'https://demo.example.edu/1/list4.htm' not in counts
 
     sections_path = out / 'sections.json'
     sections = json.loads(sections_path.read_text(encoding='utf-8'))
@@ -171,3 +180,52 @@ def test_incremental_crawl_fetches_new_details_and_preserves_noop_files(tmp_path
 
     assert 'https://demo.example.edu/2026/0503/c1a3/page.htm' not in counts
     assert {path.name: path.read_text(encoding='utf-8') for path in out.iterdir() if path.is_file()} == snapshot
+
+
+def test_failed_refresh_preserves_last_observed_page_facts(tmp_path, monkeypatch):
+    config = tmp_path / 'site.yaml'
+    out = tmp_path / 'index'
+    write_config(config)
+    detail_url = 'https://demo.example.edu/2026/0502/c1a2/page.htm'
+    pages = {
+        'https://demo.example.edu/': '<html><body>home</body></html>',
+        'https://demo.example.edu/1/list.htm': list_html(
+            [('Old notice A', '/2026/0502/c1a2/page.htm', '2026-05-02')],
+        ),
+        detail_url: detail_html('Old notice A'),
+        'https://demo.example.edu/landing/list.htm': '''
+            <html><body>
+              <div class="wp_articlecontent">Landing system</div>
+            </body></html>
+        ''',
+    }
+    fail_detail_refresh = False
+
+    def fake_fetch(url: str, timeout: int = 20, verify: bool = True) -> FetchResult:
+        if fail_detail_refresh and url == detail_url:
+            return FetchResult(
+                url=url,
+                final_url=url,
+                status_code=None,
+                text='',
+                error='intranet-only page is not reachable from this runner',
+            )
+        return FetchResult(url=url, final_url=url, status_code=200, text=pages[url])
+
+    monkeypatch.setattr(cli, 'fetch_html', fake_fetch)
+    run_crawl(config, out, incremental=False)
+    original_details = (out / 'detail_pages.jsonl').read_text(encoding='utf-8')
+    original_external = (out / 'external_links.jsonl').read_text(encoding='utf-8')
+
+    fail_detail_refresh = True
+    run_crawl(config, out, incremental=True, refresh_frontier=1)
+
+    assert (out / 'detail_pages.jsonl').read_text(encoding='utf-8') == original_details
+    assert (out / 'external_links.jsonl').read_text(encoding='utf-8') == original_external
+    manifest = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
+    assert any(
+        error["phase"] == "detail"
+        and error["url"] == detail_url
+        and "intranet-only" in error["message"]
+        for error in manifest["errors"]
+    )

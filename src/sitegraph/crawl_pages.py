@@ -11,7 +11,6 @@ from .extract import (
     extract_list_items,
     extract_pagination_metadata,
 )
-from .coverage import record_pagination_evidence
 from .util import normalize_url, now_iso, stable_id
 
 
@@ -71,25 +70,13 @@ class CrawlPageRunner:
                 self.state.add_external(inline_link, url, section)
             elif inline_link['target_type'] == 'section_list_page' and same_domain(inline_link['url'], self.base_url):
                 self.queue_inline_section(inline_link, section, url)
-                self.state.add_outcome(
-                    inline_link['url'],
-                    inline_link['target_type'],
-                    'inline_link_recorded',
-                    url,
-                    inline_link.get('label'),
-                    section['section_id'],
+            elif inline_link["target_type"] == "detail_article_page":
+                self.state.add_detail_candidate(
+                    inline_link["url"],
+                    source_url=url,
+                    label=inline_link.get("label"),
+                    section_id=section["section_id"],
                 )
-            else:
-                self.state.add_outcome(
-                    inline_link['url'],
-                    inline_link['target_type'],
-                    'inline_link_recorded',
-                    url,
-                    inline_link.get('label'),
-                    section['section_id'],
-                )
-        for image in page.get('inline_images', []):
-            self.state.add_outcome(image['url'], 'static_asset', 'inline_image_recorded', url, image.get('alt'), section['section_id'])
 
     def crawl_detail(
         self,
@@ -100,29 +87,33 @@ class CrawlPageRunner:
         force_refresh: bool = False,
     ) -> None:
         url = normalize_url(url, self.base_url)
-        if url in self.state.detail_records_by_url and not force_refresh:
-            self.state.add_outcome(url, 'detail_article_page', 'crawled_detail_ok', source_url, label, section['section_id'])
+        if url in self.state.package.detail_pages_by_url and not force_refresh:
             return
-        if force_refresh:
-            self.state.remove_records_from_source(url)
         res = self.state.fetch(url)
         if res.error or (res.status_code and res.status_code >= 400):
-            err = {
-                'url': url,
-                'status_code': res.status_code,
-                'error': res.error or f'HTTP {res.status_code}',
-                'section_id': section['section_id'],
-                'phase': 'detail',
-            }
-            self.state.manifest['errors'].append(err)
-            self.state.add_outcome(url, 'detail_article_page', 'error', source_url, label, section['section_id'], res.status_code, err['error'])
+            self.state.add_error(
+                phase="detail",
+                url=url,
+                status_code=res.status_code,
+                section_id=section["section_id"],
+                message=res.error or f"HTTP {res.status_code}",
+                source_url=source_url,
+            )
             return
         page, atts, edges = extract_detail_page(res.text, url, self.base_url, self.site_id, section['section_id'])
-        self.state.detail_records_by_url[url] = page
+        if force_refresh:
+            self.state.remove_records_from_source(url)
+        self.state.package.detail_pages_by_url[url] = page
         self.state.add_edges(edges)
-        self.state.add_outcome(url, 'detail_article_page', 'crawled_detail_ok', source_url, label, section['section_id'], res.status_code)
+        if not page.get("title") and not page.get("content_text"):
+            self.state.add_error(
+                phase="parse",
+                url=url,
+                section_id=section["section_id"],
+                message="detail page has no title or extracted body",
+            )
         for attachment in atts:
-            self.state.add_attachment(attachment, url, section['section_id'])
+            self.state.add_attachment(attachment)
         self._record_inline_artifacts(page, url, section)
 
     def record_section_content_page(
@@ -134,8 +125,12 @@ class CrawlPageRunner:
         status_code: int | None = None,
     ) -> None:
         url = normalize_url(url, self.base_url)
-        if url in self.state.detail_records_by_url:
-            self._record_inline_artifacts(self.state.detail_records_by_url[url], url, section)
+        if url in self.state.package.detail_pages_by_url:
+            self._record_inline_artifacts(
+                self.state.package.detail_pages_by_url[url],
+                url,
+                section,
+            )
             return
         page, atts, edges = extract_detail_page(html, url, self.base_url, self.site_id, section['section_id'])
         if not (page.get('title') or page.get('content_text') or atts or page.get('inline_links') or page.get('inline_images')):
@@ -143,10 +138,10 @@ class CrawlPageRunner:
         page['page_type'] = 'section_content_page'
         page['source_page_type'] = 'section_list_page'
         page['source_status_code'] = status_code
-        self.state.detail_records_by_url[url] = page
+        self.state.package.detail_pages_by_url[url] = page
         self.state.add_edges(edges)
         for attachment in atts:
-            self.state.add_attachment(attachment, url, section['section_id'])
+            self.state.add_attachment(attachment)
         self._record_inline_artifacts(page, url, section)
 
     def crawl_list_section(self, section: dict) -> None:
@@ -160,22 +155,19 @@ class CrawlPageRunner:
         max_pages = int(section.get('pagination', {}).get('max_pages_safety', self.cfg.get('crawl_policy', {}).get('max_pages_safety', 20)))
         last_url: str | None = None
         termination_reason = 'empty_start_url'
-        terminal_verified = False
         while next_url and next_url not in visited and page_index <= max_pages:
             current_url = next_url
             last_url = current_url
             visited.add(next_url)
             res = self.state.fetch(next_url)
             if res.error or (res.status_code and res.status_code >= 400):
-                err = {
-                    'url': next_url,
-                    'status_code': res.status_code,
-                    'error': res.error or f'HTTP {res.status_code}',
-                    'section_id': section_id,
-                    'phase': 'list',
-                }
-                self.state.manifest['errors'].append(err)
-                self.state.add_outcome(next_url, 'section_list_page', 'error', section.get('url'), section.get('name'), section_id, res.status_code, err['error'])
+                self.state.add_error(
+                    phase="list",
+                    url=next_url,
+                    status_code=res.status_code,
+                    section_id=section_id,
+                    message=res.error or f"HTTP {res.status_code}",
+                )
                 termination_reason = 'fetch_error'
                 break
             item_container_selector = section.get('item_container_selector') or self.cfg.get('selectors', {}).get('list', {}).get('item_container')
@@ -197,9 +189,10 @@ class CrawlPageRunner:
                 'fetched_at': now_iso(),
             }
             pages_crawled += 1
-            self.state.add_outcome(next_url, 'section_list_page', 'crawled_list_ok', section.get('url'), section.get('name'), section_id, res.status_code)
             if not items:
                 self.record_section_content_page(next_url, section, section.get('url'), res.text, res.status_code)
+                termination_reason = 'empty_list_page'
+                break
             for item in items:
                 frontier_remaining = self._record_list_item(
                     item,
@@ -211,12 +204,10 @@ class CrawlPageRunner:
             next_url = discover_next_url(res.text, next_url, self.base_url)
             if not next_url:
                 termination_reason = 'no_next_page'
-                terminal_verified = True
             if self.state.incremental:
                 known_pages_in_a_row = 0 if page_has_new else known_pages_in_a_row + 1
                 if known_pages_in_a_row >= self.known_page_stop:
                     termination_reason = 'incremental_known_page_stop'
-                    terminal_verified = True
                     break
             page_index += 1
         else:
@@ -226,30 +217,19 @@ class CrawlPageRunner:
                 termination_reason = 'safety_cap'
             elif not next_url:
                 termination_reason = 'no_next_page'
-                terminal_verified = True
 
         if termination_reason == 'safety_cap' and not self.state.incremental:
-            err = {
-                'url': last_url,
-                'next_url': next_url,
-                'section_id': section_id,
-                'phase': 'pagination',
-                'error': f'pagination reached max_pages_safety={max_pages} before terminal page',
-            }
-            self.state.manifest['errors'].append(err)
-
-        if not self.state.incremental:
-            record_pagination_evidence(self.state.manifest, {
-                'section_id': section_id,
-                'section_name': section.get('name'),
-                'section_url': section.get('url'),
-                'last_url': last_url,
-                'next_url': next_url,
-                'pages_crawled': pages_crawled,
-                'max_pages_safety': max_pages,
-                'termination_reason': termination_reason,
-                'terminal_verified': terminal_verified,
-            })
+            self.state.add_error(
+                phase="pagination",
+                url=last_url,
+                section_id=section_id,
+                message=(
+                    f"pagination reached max_pages_safety={max_pages} "
+                    "before the next page disappeared"
+                ),
+                next_url=next_url,
+                pages_crawled=pages_crawled,
+            )
 
     def _record_list_item(
         self,
@@ -262,7 +242,7 @@ class CrawlPageRunner:
         target_type = item['target_type']
         item_url = normalize_url(item['url'], self.base_url)
         edge_id = stable_id(next_url, item_url, item['title'], item.get('position', 0))
-        self.state.edges_by_id[edge_id] = {
+        self.state.package.edges_by_id[edge_id] = {
             'edge_id': edge_id,
             'from_url': next_url,
             'to_url': item_url,
@@ -272,7 +252,7 @@ class CrawlPageRunner:
             'same_domain': same_domain(item_url, self.base_url),
         }
         if target_type == 'detail_article_page':
-            old_page = self.state.detail_records_by_url.get(item_url)
+            old_page = self.state.package.detail_pages_by_url.get(item_url)
             title_changed = bool(old_page and item.get('title') and old_page.get('title') and item['title'] != old_page.get('title'))
             refresh_recent = self.state.incremental and item_url in self.state.initial_known_urls and frontier_remaining > 0
             if refresh_recent:
@@ -280,7 +260,7 @@ class CrawlPageRunner:
             force_refresh = (
                 not self.state.incremental
                 or item_url not in self.state.initial_known_urls
-                or item_url not in self.state.detail_records_by_url
+                or item_url not in self.state.package.detail_pages_by_url
                 or title_changed
                 or refresh_recent
             )
@@ -293,11 +273,16 @@ class CrawlPageRunner:
                 'url': item_url,
                 'extension': item_url.rsplit('.', 1)[-1].lower(),
                 'position': item.get('position', 0),
-            }, next_url, section_id)
+            })
         elif target_type in {'external_link', 'redirect_link'}:
             self.state.add_external({'url': item_url, 'label': item['title'], 'target_type': target_type}, next_url, section)
-        else:
-            self.state.add_outcome(item_url, target_type, f'{target_type}_recorded', next_url, item['title'], section_id)
+        elif target_type == "same_domain_page_unknown":
+            self.state.add_error(
+                phase="classify",
+                url=item_url,
+                section_id=section_id,
+                message="unrecognized same-domain page type",
+            )
         return frontier_remaining
 
     def _crawl_direct_detail_backfill(self, section_index: int) -> None:
@@ -319,9 +304,8 @@ class CrawlPageRunner:
         while True:
             direct_detail_urls = [
                 (url, record)
-                for url, record in list(self.state.manifest['url_outcomes'].items())
-                if record.get('target_type') == 'detail_article_page'
-                and record.get('outcome') not in {'crawled_detail_ok', 'error'}
+                for url, record in list(self.state.pending_details.items())
+                if url not in self.state.package.detail_pages_by_url
                 and url not in self.seen_direct_details
             ]
             if not direct_detail_urls:
@@ -334,7 +318,7 @@ class CrawlPageRunner:
                 self.crawl_detail(
                     url,
                     direct_detail_section,
-                    (record.get('sources') or [self.base_url])[0],
-                    (record.get('labels') or [None])[0],
+                    record.get("source_url") or self.base_url,
+                    record.get("label"),
                 )
             section_index = self._crawl_pending_sections(section_index)

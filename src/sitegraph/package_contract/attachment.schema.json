@@ -1,35 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:static-site-graph:site-package:attachment",
   "type": "object",
   "required": [
-    "site_id",
+    "attachment_id",
+    "parent_url",
     "name",
-    "base_url",
-    "domain",
-    "adapter",
-    "created_at"
+    "url",
+    "extension"
   ],
   "properties": {
-    "site_id": {
+    "attachment_id": {
+      "type": "string"
+    },
+    "parent_url": {
       "type": "string"
     },
     "name": {
       "type": "string"
     },
-    "base_url": {
+    "url": {
       "type": "string"
     },
-    "domain": {
+    "extension": {
       "type": "string"
     },
-    "adapter": {
-      "type": "string"
-    },
-    "created_at": {
-      "type": "string"
-    },
-    "notes": {
-      "type": "string"
+    "position": {
+      "type": "integer"
     }
   }
 }

@@ -5,10 +5,10 @@ def test_import():
 def test_webplus_list_psp_and_redirect_classification():
     from sitegraph.classify import classify_url
 
-    base_url = 'https://xsc.njupt.edu.cn/'
+    base_url = 'https://demo.example.edu/'
 
-    assert classify_url('https://xsc.njupt.edu.cn/_s24/_t3618/1160%20/list.psp', base_url) == 'section_list_page'
-    assert classify_url('https://xsc.njupt.edu.cn/_redirect?siteId=1&articleId=2', base_url) == 'redirect_link'
+    assert classify_url('https://demo.example.edu/_s24/_t3618/1160%20/list.psp', base_url) == 'section_list_page'
+    assert classify_url('https://demo.example.edu/_redirect?siteId=1&articleId=2', base_url) == 'redirect_link'
 
 
 def test_webplus_pagination_metadata_with_nav_words():

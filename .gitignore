@@ -7,12 +7,3 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
-
-# Local-only planning, docs, reports, and agent configuration.
-/AGENTS.md
-/CLAUDE.md
-/.agents/
-/.claude/
-/docs/
-/prompts/
-/reports/

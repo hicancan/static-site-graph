@@ -36,7 +36,6 @@ def configured_homepage_modules(cfg: dict, base_url: str, site_id: str) -> list[
             'link_count': item.get('link_count'),
             'position': item.get('position', idx),
             'source': item.get('source', 'config'),
-            'notes': item.get('notes'),
         })
     return modules
 
@@ -44,16 +43,14 @@ def configured_homepage_modules(cfg: dict, base_url: str, site_id: str) -> list[
 def crawl_homepage(cfg: dict, *, base_url: str, site_id: str, state: CrawlState) -> HomepageCrawlResult:
     home_res = state.fetch(base_url)
     if home_res.error or (home_res.status_code and home_res.status_code >= 400):
-        state.manifest['errors'].append({
-            'url': base_url,
-            'status_code': home_res.status_code,
-            'error': home_res.error or f'HTTP {home_res.status_code}',
-            'phase': 'homepage',
-        })
-        state.add_outcome(base_url, 'homepage', 'error', status_code=home_res.status_code, error=home_res.error)
+        state.add_error(
+            phase="homepage",
+            url=base_url,
+            status_code=home_res.status_code,
+            message=home_res.error or f"HTTP {home_res.status_code}",
+        )
         return HomepageCrawlResult(home_html='', nav_nodes=[], homepage_modules=[])
 
-    state.add_outcome(base_url, 'homepage', 'crawled_homepage_ok', status_code=home_res.status_code)
     home_html = home_res.text
     nav_nodes = extract_nav_tree_from_homepage(home_html, base_url, base_url, site_id)
     homepage_cfg = cfg.get('selectors', {}).get('homepage', {})
@@ -88,9 +85,13 @@ def crawl_homepage(cfg: dict, *, base_url: str, site_id: str, state: CrawlState)
                 'url': link['url'],
                 'extension': link['url'].rsplit('.', 1)[-1].lower(),
                 'position': link.get('position', 0),
-            }, base_url)
-        else:
-            state.add_outcome(link['url'], link['target_type'], 'homepage_link_recorded', base_url, link.get('label'))
+            })
+        elif link["target_type"] == "detail_article_page":
+            state.add_detail_candidate(
+                link["url"],
+                source_url=base_url,
+                label=link.get("label"),
+            )
 
     return HomepageCrawlResult(
         home_html=home_html,
